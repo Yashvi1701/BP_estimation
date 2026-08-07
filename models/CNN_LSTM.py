@@ -94,11 +94,6 @@ class CNN_LSTM(nn.Module):
         )
 
 
-        # Final BP prediction layer
-
-        self.output_layer = nn.Linear(32,2)
-
-
     def forward(self,x):
 
         # -------------------------
@@ -138,8 +133,5 @@ class CNN_LSTM(nn.Module):
         # -------------------------
 
         x = self.regressor(x)
-
-        x = self.output_layer(x)
-
 
         return x

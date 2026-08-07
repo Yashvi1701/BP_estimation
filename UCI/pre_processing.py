@@ -1,6 +1,11 @@
 from scipy.signal import find_peaks
 import numpy as np
 from tqdm import tqdm
+import h5py
+import torch
+from sklearn.model_selection import train_test_split
+from torch.utils.data import Dataset, DataLoader
+
 
 
 def extract_bp_from_abp(abp_window):
@@ -128,3 +133,232 @@ def process_split(record_list):
     print("Skipped recordings:", skipped)
 
     return X_all, y_all
+
+
+
+def load_UCI_dataset(
+    data_path="../UCI/data",
+    test_size=0.2,
+    val_size=0.1,
+    random_state=42
+):
+
+
+    # ============================
+    # Load recordings
+    # ============================
+
+    recordings = []
+
+
+    for part in range(1,5):
+
+        file_path = f"{data_path}/Part_{part}.mat"
+
+        f = h5py.File(file_path, "r")
+
+        dataset = f[f"Part_{part}"]
+
+
+        for i in range(dataset.shape[0]):
+
+            recordings.append(
+                (f, dataset[i,0])
+            )
+
+
+    print("Total recordings:", len(recordings))
+
+
+    # ============================
+    # Train-test split
+    # ============================
+
+    train_records, test_records = train_test_split(
+        recordings,
+        test_size=test_size,
+        random_state=random_state,
+        shuffle=True
+    )
+
+
+    # ============================
+    # Train-validation split
+    # ============================
+
+    train_records, val_records = train_test_split(
+        train_records,
+        test_size=val_size,
+        random_state=random_state,
+        shuffle=True
+    )
+
+
+    print(
+        f"Train recordings: {len(train_records)}"
+    )
+
+    print(
+        f"Validation recordings: {len(val_records)}"
+    )
+
+    print(
+        f"Test recordings: {len(test_records)}"
+    )
+
+
+    # ============================
+    # Preprocessing
+    # ============================
+
+    X_train, y_train = process_split(train_records)
+
+    X_val, y_val = process_split(val_records)
+
+    X_test, y_test = process_split(test_records)
+
+
+
+    # ============================
+    # Add channel dimension
+    # CNN input:
+    # (batch, channels, samples)
+    # ============================
+
+    X_train = X_train[:,None,:]
+
+    X_val = X_val[:,None,:]
+
+    X_test = X_test[:,None,:]
+
+
+
+    # ============================
+    # Convert to tensors
+    # ============================
+
+    X_train = torch.tensor(
+        X_train,
+        dtype=torch.float32
+    )
+
+    X_val = torch.tensor(
+        X_val,
+        dtype=torch.float32
+    )
+
+    X_test = torch.tensor(
+        X_test,
+        dtype=torch.float32
+    )
+
+
+
+    y_train = torch.tensor(
+        y_train,
+        dtype=torch.float32
+    )
+
+    y_val = torch.tensor(
+        y_val,
+        dtype=torch.float32
+    )
+
+    y_test = torch.tensor(
+        y_test,
+        dtype=torch.float32
+    )
+
+
+    return (
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        X_test,
+        y_test
+    )
+
+
+
+
+
+class PPGDataset(Dataset):
+
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+
+
+    def __len__(self):
+        return len(self.X)
+
+
+    def __getitem__(self, idx):
+
+        return self.X[idx], self.y[idx]
+
+
+
+def create_dataloaders(
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    X_test,
+    y_test,
+    batch_size=64
+):
+
+    # ==========================
+    # Create datasets
+    # ==========================
+
+    train_dataset = PPGDataset(
+        X_train,
+        y_train
+    )
+
+
+    val_dataset = PPGDataset(
+        X_val,
+        y_val
+    )
+
+
+    test_dataset = PPGDataset(
+        X_test,
+        y_test
+    )
+
+
+    # ==========================
+    # Create dataloaders
+    # ==========================
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True
+    )
+
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False
+    )
+
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False
+    )
+
+
+    return (
+        train_loader,
+        val_loader,
+        test_loader
+    )
