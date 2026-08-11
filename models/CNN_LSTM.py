@@ -1,13 +1,15 @@
 import torch
 import torch.nn as nn
 
+import torch
+import torch.nn as nn
 
-class CNN_LSTM(nn.Module):
+
+class CNN_LSTM_Dropout(nn.Module):
 
     def __init__(self):
 
         super().__init__()
-
 
         # -------------------------
         # CNN Feature Extractor
@@ -21,11 +23,11 @@ class CNN_LSTM(nn.Module):
                 kernel_size=5,
                 padding=2
             ),
+
             nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.MaxPool1d(2),
             nn.Dropout(0.2),
-
 
             nn.Conv1d(
                 in_channels=32,
@@ -33,11 +35,11 @@ class CNN_LSTM(nn.Module):
                 kernel_size=5,
                 padding=2
             ),
+
             nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.MaxPool1d(2),
             nn.Dropout(0.2),
-
 
             nn.Conv1d(
                 in_channels=64,
@@ -45,31 +47,22 @@ class CNN_LSTM(nn.Module):
                 kernel_size=3,
                 padding=1
             ),
+
             nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1)
-
+            nn.ReLU()
         )
-
 
         # -------------------------
         # LSTM
         # -------------------------
 
         self.lstm = nn.LSTM(
-
             input_size=128,
-
             hidden_size=64,
-
             num_layers=2,
-
             batch_first=True,
-
             dropout=0.3
-
         )
-
 
         # -------------------------
         # Regression Head
@@ -77,24 +70,18 @@ class CNN_LSTM(nn.Module):
 
         self.regressor = nn.Sequential(
 
-            nn.Linear(64,64),
-
-            nn.ReLU(),
-
-            nn.Dropout(0.3),
-
-            nn.Linear(64,32),
-
+            nn.Linear(64, 64),
             nn.ReLU(),
             nn.Dropout(0.3),
 
-            nn.Linear(32,2)
-            
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Dropout(0.3),
 
+            nn.Linear(32, 2)
         )
 
-
-    def forward(self,x):
+    def forward(self, x):
 
         # -------------------------
         # CNN
@@ -102,17 +89,15 @@ class CNN_LSTM(nn.Module):
 
         x = self.features(x)
 
-        # (batch,128,250)
-
+        # (batch, 128, 250)
 
         # -------------------------
         # Prepare for LSTM
         # -------------------------
 
-        x = x.permute(0,2,1)
+        x = x.permute(0, 2, 1)
 
-        # (batch,250,128)
-
+        # (batch, 250, 128)
 
         # -------------------------
         # LSTM
@@ -120,13 +105,130 @@ class CNN_LSTM(nn.Module):
 
         output, (hidden, cell) = self.lstm(x)
 
-
-        # Take last hidden state
+        # -------------------------
+        # Last time step
+        # -------------------------
 
         x = output[:, -1, :]
 
-        # (batch,64)
+        # (batch, 64)
 
+        # -------------------------
+        # Regression
+        # -------------------------
+
+        x = self.regressor(x)
+
+        return x
+
+
+import torch
+import torch.nn as nn
+
+
+class CNN_LSTM_NoDropout(nn.Module):
+
+    def __init__(self):
+
+        super().__init__()
+
+        # -------------------------
+        # CNN Feature Extractor
+        # -------------------------
+
+        self.features = nn.Sequential(
+
+            nn.Conv1d(
+                in_channels=1,
+                out_channels=32,
+                kernel_size=5,
+                padding=2
+            ),
+
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+
+            nn.Conv1d(
+                in_channels=32,
+                out_channels=64,
+                kernel_size=5,
+                padding=2
+            ),
+
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+
+            nn.Conv1d(
+                in_channels=64,
+                out_channels=128,
+                kernel_size=3,
+                padding=1
+            ),
+
+            nn.BatchNorm1d(128),
+            nn.ReLU()
+        )
+
+        # -------------------------
+        # LSTM
+        # -------------------------
+
+        self.lstm = nn.LSTM(
+            input_size=128,
+            hidden_size=64,
+            num_layers=2,
+            batch_first=True,
+            dropout=0.0
+        )
+
+        # -------------------------
+        # Regression Head
+        # -------------------------
+
+        self.regressor = nn.Sequential(
+
+            nn.Linear(64, 64),
+            nn.ReLU(),
+
+            nn.Linear(64, 32),
+            nn.ReLU(),
+
+            nn.Linear(32, 2)
+        )
+
+    def forward(self, x):
+
+        # -------------------------
+        # CNN
+        # -------------------------
+
+        x = self.features(x)
+
+        # (batch, 128, 250)
+
+        # -------------------------
+        # Prepare for LSTM
+        # -------------------------
+
+        x = x.permute(0, 2, 1)
+
+        # (batch, 250, 128)
+
+        # -------------------------
+        # LSTM
+        # -------------------------
+
+        output, (hidden, cell) = self.lstm(x)
+
+        # -------------------------
+        # Last time step
+        # -------------------------
+
+        x = output[:, -1, :]
+
+        # (batch, 64)
 
         # -------------------------
         # Regression

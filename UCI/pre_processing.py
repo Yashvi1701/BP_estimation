@@ -63,7 +63,7 @@ def extract_bp_from_abp(abp_window):
 
     return sbp, dbp
 
-def process_recording(recording, WINDOW_SIZE = 1000, STEP_SIZE = 500 ):
+def process_recording(recording, WINDOW_SIZE, STEP_SIZE ):
 
     data = recording[:]
 
@@ -106,7 +106,7 @@ def process_recording(recording, WINDOW_SIZE = 1000, STEP_SIZE = 500 ):
 
 
 
-def process_split(record_list):
+def process_split(record_list, WINDOW_SIZE, STEP_SIZE):
 
     X_all = []
     y_all = []
@@ -117,7 +117,7 @@ def process_split(record_list):
 
         recording = f[ref]
 
-        X, y = process_recording(recording, WINDOW_SIZE=1000, STEP_SIZE=500)
+        X, y = process_recording(recording, WINDOW_SIZE, STEP_SIZE)
 
         if X is None:
             skipped += 1
@@ -137,10 +137,13 @@ def process_split(record_list):
 
 
 def load_UCI_dataset(
-    data_path="../UCI/data",
+    WINDOW_SIZE, 
+    STEP_SIZE,
+    data_path="/data1/yashvi_bhuva/BP_estimation_using_PPG/UCI/data",
     test_size=0.2,
     val_size=0.1,
-    random_state=42
+    random_state=42,
+    
 ):
 
 
@@ -211,11 +214,14 @@ def load_UCI_dataset(
     # Preprocessing
     # ============================
 
-    X_train, y_train = process_split(train_records)
+    X_train, y_train = process_split(train_records,WINDOW_SIZE, 
+    STEP_SIZE)
 
-    X_val, y_val = process_split(val_records)
+    X_val, y_val = process_split(val_records,WINDOW_SIZE, 
+    STEP_SIZE)
 
-    X_test, y_test = process_split(test_records)
+    X_test, y_test = process_split(test_records,WINDOW_SIZE, 
+    STEP_SIZE)
 
 
 
@@ -362,3 +368,5 @@ def create_dataloaders(
         val_loader,
         test_loader
     )
+
+
