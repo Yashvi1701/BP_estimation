@@ -179,33 +179,132 @@ def get_dicrotic_notch(
     return best_idx
 
 
-def get_decay_time(ppg_window, fs=125):
+
+def get_delay_time(ppg_window, fs=125):
     """
-    Returns diastolic decay time (systolic peak -> dicrotic notch), in seconds.
-    Returns None if either landmark could not be detected (caller should
-    skip / fall back to a dataset-median value for that sample).
+    Detect all systolic peaks and estimate the
+    peak-to-dicrotic-notch delay for each beat.
+
+    Returns:
+        delays : np.ndarray
+            Delay for each successfully detected beat.
     """
-    sys_idx = get_systolic_peak(ppg_window, fs)
-    notch_idx = get_dicrotic_notch(ppg_window, sys_idx, fs)
-    if sys_idx is None or notch_idx is None:
-        return None
-    return (notch_idx - sys_idx) / fs
+
+    # -----------------------------------------
+    # Detect ALL systolic peaks
+    # -----------------------------------------
+
+    sys_indices = get_systolic_peak(
+        ppg_window,
+        fs
+    )
+
+    if sys_indices is None or len(sys_indices) == 0:
+        return np.array([])
 
 
-def extract_decay_times(ppg_windows, fs=125, fallback='median'):
+    delays = []
+
+
+    # -----------------------------------------
+    # Process each systolic peak separately
+    # -----------------------------------------
+
+    for sys_idx in sys_indices:
+
+        notch_idx = get_dicrotic_notch(
+            ppg_window,
+            sys_idx,
+            fs
+        )
+
+        if notch_idx is None:
+            continue
+
+
+        # -------------------------------------
+        # Peak → notch delay
+        # -------------------------------------
+
+        delay = (
+            notch_idx - sys_idx
+        ) / fs
+
+
+        # -------------------------------------
+        # Reject unreasonable delays
+        # -------------------------------------
+
+        if delay < 0.08 or delay > 0.35:
+            continue
+
+
+        delays.append(delay)
+
+
+    return np.array(
+        delays,
+        dtype=np.float32
+    )
+
+
+def extract_delay_times(
+    ppg_windows,
+    fs=125,
+    min_delay=0.08,
+    max_delay=0.35
+):
     """
-    Runs decay-time extraction over a full array of PPG windows (N, L).
-    Failed detections are filled with the median of successful ones.
-    Returns: np.array of shape (N,)
+    Extracts peak-to-notch delay for every PPG window.
+
+    Invalid detections are NOT replaced with the median.
+    They are stored as NaN.
+
+    Returns:
+        delay_times : np.ndarray of shape (N,)
     """
-    decay_times = []
+
+    delay_times = []
+
+
     for w in ppg_windows:
-        dt = get_decay_time(w, fs)
-        decay_times.append(dt)
- 
-    decay_times = np.array([d if d is not None else np.nan for d in decay_times])
-    valid = decay_times[~np.isnan(decay_times)]
-    if fallback == 'median' and len(valid) > 0:
-        med = np.median(valid)
-        decay_times = np.where(np.isnan(decay_times), med, decay_times)
-    return decay_times.astype(np.float32)
+
+        dt = get_delay_time(
+            w,
+            fs
+        )
+
+
+        # -------------------------------------
+        # Detection failed
+        # -------------------------------------
+
+        if dt is None:
+
+            delay_times.append(np.nan)
+
+            continue
+
+
+        # -------------------------------------
+        # Reject physiologically unreasonable
+        # delays
+        # -------------------------------------
+
+        if (
+            dt < min_delay
+            or
+            dt > max_delay
+        ):
+
+            delay_times.append(np.nan)
+
+        else:
+
+            delay_times.append(dt)
+
+
+    return np.array(
+        delay_times,
+        dtype=np.float32
+    )
