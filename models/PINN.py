@@ -888,8 +888,6 @@ def prepare_UCI_dataset(
     )
 
 
-import numpy as np
-
 
 def estimate_RC(
     sbp,
