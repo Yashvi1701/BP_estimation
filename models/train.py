@@ -333,275 +333,101 @@ def evaluate_model(model, test_loader, device):
 
     model.eval()
 
-    predictions = []
-    targets = []
+    test_sbp_errors = []
+    test_dbp_errors = []
 
-    # ==========================================
-    # Prediction
-    # ==========================================
+    test_predictions = []
+    test_targets = []
 
     with torch.no_grad():
 
-        for X_batch, y_batch in test_loader:
+        for X, y in test_loader:
 
-            X_batch = X_batch.to(device)
-
-            outputs = model(X_batch)
-
-            predictions.append(
-                outputs.cpu().numpy()
+            X = X.to(
+                device,
+                non_blocking=True
             )
 
-            targets.append(
-                y_batch.numpy()
+            y = y.to(
+                device,
+                non_blocking=True
             )
 
-    predictions = np.concatenate(
-        predictions,
-        axis=0
-    )
+            predictions = model(X)
 
-    targets = np.concatenate(
-        targets,
-        axis=0
-    )
+            # Errors
+            test_sbp_errors.append(
+                (predictions[:, 0] - y[:, 0]).cpu()
+            )
 
-    # ==========================================
-    # Errors
-    # ==========================================
+            test_dbp_errors.append(
+                (predictions[:, 1] - y[:, 1]).cpu()
+            )
 
-    sbp_errors = (
-        predictions[:, 0]
-        - targets[:, 0]
-    )
+            # Store predictions and targets
+            test_predictions.append(
+                predictions.cpu()
+            )
 
-    dbp_errors = (
-        predictions[:, 1]
-        - targets[:, 1]
-    )
+            test_targets.append(
+                y.cpu()
+            )
 
-    # ==========================================
+    # Concatenate batches
+    test_sbp_errors = torch.cat(test_sbp_errors)
+    test_dbp_errors = torch.cat(test_dbp_errors)
+
+    test_predictions = torch.cat(test_predictions)
+    test_targets = torch.cat(test_targets)
+
     # MAE
-    # ==========================================
+    test_sbp_mae = torch.mean(
+        torch.abs(test_sbp_errors)
+    ).item()
 
-    sbp_mae = mean_absolute_error(
-        targets[:, 0],
-        predictions[:, 0]
-    )
+    test_dbp_mae = torch.mean(
+        torch.abs(test_dbp_errors)
+    ).item()
 
-    dbp_mae = mean_absolute_error(
-        targets[:, 1],
-        predictions[:, 1]
-    )
-
-    # ==========================================
     # RMSE
-    # ==========================================
+    test_sbp_rmse = torch.sqrt(
+        torch.mean(test_sbp_errors ** 2)
+    ).item()
 
-    sbp_rmse = np.sqrt(
-        mean_squared_error(
-            targets[:, 0],
-            predictions[:, 0]
-        )
-    )
+    test_dbp_rmse = torch.sqrt(
+        torch.mean(test_dbp_errors ** 2)
+    ).item()
 
-    dbp_rmse = np.sqrt(
-        mean_squared_error(
-            targets[:, 1],
-            predictions[:, 1]
-        )
-    )
-
-    # ==========================================
-    # Error Variance
-    # ==========================================
-
-    sbp_variance = np.var(
-        sbp_errors
-    )
-
-    dbp_variance = np.var(
-        dbp_errors
-    )
-
-    # ==========================================
-    # Error Standard Deviation
-    # ==========================================
-
-    sbp_std = np.std(
-        sbp_errors
-    )
-
-    dbp_std = np.std(
-        dbp_errors
-    )
-
-    # ==========================================
-    # Print Metrics
-    # ==========================================
-
+    # Print results
     print("\n================================")
-    print("TEST RESULTS")
+    print("WINDKESSEL PINN TEST RESULTS")
     print("================================")
 
     print(
-        f"SBP MAE      : {sbp_mae:.2f} mmHg"
+        f"SBP MAE  : {test_sbp_mae:.2f} mmHg"
     )
 
     print(
-        f"SBP RMSE     : {sbp_rmse:.2f} mmHg"
+        f"SBP RMSE : {test_sbp_rmse:.2f} mmHg"
     )
 
     print(
-        f"SBP Variance : {sbp_variance:.2f} mmHg²"
+        f"DBP MAE  : {test_dbp_mae:.2f} mmHg"
     )
 
     print(
-        f"SBP Std Dev  : {sbp_std:.2f} mmHg"
+        f"DBP RMSE : {test_dbp_rmse:.2f} mmHg"
     )
 
-    print()
-
-    print(
-        f"DBP MAE      : {dbp_mae:.2f} mmHg"
-    )
-
-    print(
-        f"DBP RMSE     : {dbp_rmse:.2f} mmHg"
-    )
-
-    print(
-        f"DBP Variance : {dbp_variance:.2f} mmHg²"
-    )
-
-    print(
-        f"DBP Std Dev  : {dbp_std:.2f} mmHg"
-    )
-
-    # ==========================================
-    # SBP Scatter Plot
-    # ==========================================
-
-    plt.figure(figsize=(7, 7))
-
-    plt.scatter(
-        targets[:, 0],
-        predictions[:, 0],
-        alpha=0.3,
-        s=10
-    )
-
-    min_val = min(
-        targets[:, 0].min(),
-        predictions[:, 0].min()
-    )
-
-    max_val = max(
-        targets[:, 0].max(),
-        predictions[:, 0].max()
-    )
-
-    plt.plot(
-        [min_val, max_val],
-        [min_val, max_val],
-        linestyle="--",
-        label="Perfect Prediction"
-    )
-
-    plt.xlabel(
-        "Actual SBP (mmHg)"
-    )
-
-    plt.ylabel(
-        "Predicted SBP (mmHg)"
-    )
-
-    plt.title(
-        f"SBP: Actual vs Predicted\n"
-        f"MAE = {sbp_mae:.2f} mmHg | "
-        f"RMSE = {sbp_rmse:.2f} mmHg"
-    )
-
-    plt.legend()
-    plt.grid(
-        True,
-        alpha=0.3
-    )
-
-    plt.show()
-
-    # ==========================================
-    # DBP Scatter Plot
-    # ==========================================
-
-    plt.figure(figsize=(7, 7))
-
-    plt.scatter(
-        targets[:, 1],
-        predictions[:, 1],
-        alpha=0.3,
-        s=10
-    )
-
-    min_val = min(
-        targets[:, 1].min(),
-        predictions[:, 1].min()
-    )
-
-    max_val = max(
-        targets[:, 1].max(),
-        predictions[:, 1].max()
-    )
-
-    plt.plot(
-        [min_val, max_val],
-        [min_val, max_val],
-        linestyle="--",
-        label="Perfect Prediction"
-    )
-
-    plt.xlabel(
-        "Actual DBP (mmHg)"
-    )
-
-    plt.ylabel(
-        "Predicted DBP (mmHg)"
-    )
-
-    plt.title(
-        f"DBP: Actual vs Predicted\n"
-        f"MAE = {dbp_mae:.2f} mmHg | "
-        f"RMSE = {dbp_rmse:.2f} mmHg"
-    )
-
-    plt.legend()
-    plt.grid(
-        True,
-        alpha=0.3
-    )
-
-    plt.show()
-
-    # ==========================================
-    # Metrics Dictionary
-    # ==========================================
-
-    metrics = {
-
-        "SBP_MAE": sbp_mae,
-        "DBP_MAE": dbp_mae,
-
-        "SBP_RMSE": sbp_rmse,
-        "DBP_RMSE": dbp_rmse,
-
-        "SBP_Variance": sbp_variance,
-        "DBP_Variance": dbp_variance,
-
-        "SBP_Std": sbp_std,
-        "DBP_Std": dbp_std
+    return {
+        "sbp_mae": test_sbp_mae,
+        "sbp_rmse": test_sbp_rmse,
+        "dbp_mae": test_dbp_mae,
+        "dbp_rmse": test_dbp_rmse,
+        "predictions": test_predictions,
+        "targets": test_targets
     }
 
-    return predictions, targets, metrics
 
 
 
