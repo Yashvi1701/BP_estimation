@@ -355,16 +355,30 @@ def evaluate_model(model, test_loader, device):
 
             predictions = model(X)
 
+            # =========================================
             # Errors
+            # =========================================
+
+            sbp_errors = (
+                predictions[:, 0] - y[:, 0]
+            ).cpu()
+
+            dbp_errors = (
+                predictions[:, 1] - y[:, 1]
+            ).cpu()
+
             test_sbp_errors.append(
-                (predictions[:, 0] - y[:, 0]).cpu()
+                sbp_errors
             )
 
             test_dbp_errors.append(
-                (predictions[:, 1] - y[:, 1]).cpu()
+                dbp_errors
             )
 
+            # =========================================
             # Store predictions and targets
+            # =========================================
+
             test_predictions.append(
                 predictions.cpu()
             )
@@ -373,14 +387,30 @@ def evaluate_model(model, test_loader, device):
                 y.cpu()
             )
 
+    # =========================================
     # Concatenate batches
-    test_sbp_errors = torch.cat(test_sbp_errors)
-    test_dbp_errors = torch.cat(test_dbp_errors)
+    # =========================================
 
-    test_predictions = torch.cat(test_predictions)
-    test_targets = torch.cat(test_targets)
+    test_sbp_errors = torch.cat(
+        test_sbp_errors
+    )
 
+    test_dbp_errors = torch.cat(
+        test_dbp_errors
+    )
+
+    test_predictions = torch.cat(
+        test_predictions
+    )
+
+    test_targets = torch.cat(
+        test_targets
+    )
+
+    # =========================================
     # MAE
+    # =========================================
+
     test_sbp_mae = torch.mean(
         torch.abs(test_sbp_errors)
     ).item()
@@ -389,41 +419,109 @@ def evaluate_model(model, test_loader, device):
         torch.abs(test_dbp_errors)
     ).item()
 
+    # =========================================
     # RMSE
+    # =========================================
+
     test_sbp_rmse = torch.sqrt(
-        torch.mean(test_sbp_errors ** 2)
+        torch.mean(
+            test_sbp_errors ** 2
+        )
     ).item()
 
     test_dbp_rmse = torch.sqrt(
-        torch.mean(test_dbp_errors ** 2)
+        torch.mean(
+            test_dbp_errors ** 2
+        )
     ).item()
 
+    # =========================================
+    # Variance
+    # =========================================
+
+    test_sbp_variance = torch.var(
+        test_sbp_errors,
+        unbiased=False
+    ).item()
+
+    test_dbp_variance = torch.var(
+        test_dbp_errors,
+        unbiased=False
+    ).item()
+
+    # =========================================
+    # Standard deviation
+    # =========================================
+
+    test_sbp_std = torch.std(
+        test_sbp_errors,
+        unbiased=False
+    ).item()
+
+    test_dbp_std = torch.std(
+        test_dbp_errors,
+        unbiased=False
+    ).item()
+
+    # =========================================
     # Print results
-    print("\n================================")
-    print("WINDKESSEL PINN TEST RESULTS")
-    print("================================")
+    # =========================================
 
     print(
-        f"SBP MAE  : {test_sbp_mae:.2f} mmHg"
+        "\n================================"
+        " TEST RESULTS "
+        "================================"
     )
 
     print(
-        f"SBP RMSE : {test_sbp_rmse:.2f} mmHg"
+        f"SBP MAE      : {test_sbp_mae:.2f} mmHg"
     )
 
     print(
-        f"DBP MAE  : {test_dbp_mae:.2f} mmHg"
+        f"SBP RMSE     : {test_sbp_rmse:.2f} mmHg"
     )
 
     print(
-        f"DBP RMSE : {test_dbp_rmse:.2f} mmHg"
+        f"SBP Variance : {test_sbp_variance:.2f} mmHg²"
     )
+
+    print(
+        f"SBP Std Dev  : {test_sbp_std:.2f} mmHg"
+    )
+
+    print()
+
+    print(
+        f"DBP MAE      : {test_dbp_mae:.2f} mmHg"
+    )
+
+    print(
+        f"DBP RMSE     : {test_dbp_rmse:.2f} mmHg"
+    )
+
+    print(
+        f"DBP Variance : {test_dbp_variance:.2f} mmHg²"
+    )
+
+    print(
+        f"DBP Std Dev  : {test_dbp_std:.2f} mmHg"
+    )
+
+    # =========================================
+    # Return results
+    # =========================================
 
     return {
         "sbp_mae": test_sbp_mae,
         "sbp_rmse": test_sbp_rmse,
+        "sbp_variance": test_sbp_variance,
+        "sbp_std": test_sbp_std,
+
         "dbp_mae": test_dbp_mae,
         "dbp_rmse": test_dbp_rmse,
+        "dbp_variance": test_dbp_variance,
+        "dbp_std": test_dbp_std,
+
         "predictions": test_predictions,
         "targets": test_targets
     }
@@ -770,3 +868,281 @@ def extract_papagei_features(
     )
 
     return features, targets
+
+
+def plot_mae(results):
+
+    predictions = results["predictions"].numpy()
+    targets = results["targets"].numpy()
+
+    # ==========================================
+    # Calculate absolute errors
+    # ==========================================
+
+    sbp_errors = np.abs(
+        predictions[:, 0] - targets[:, 0]
+    )
+
+    dbp_errors = np.abs(
+        predictions[:, 1] - targets[:, 1]
+    )
+
+    # ==========================================
+    # MAE and variance
+    # ==========================================
+
+    sbp_mae = np.mean(sbp_errors)
+    dbp_mae = np.mean(dbp_errors)
+
+    sbp_variance = np.var(sbp_errors)
+    dbp_variance = np.var(dbp_errors)
+
+    sbp_std = np.std(sbp_errors)
+    dbp_std = np.std(dbp_errors)
+
+    # ==========================================
+    # Print statistics
+    # ==========================================
+
+    print("\n================================")
+    print("ABSOLUTE ERROR STATISTICS")
+    print("================================")
+
+    print(f"SBP MAE      : {sbp_mae:.2f} mmHg")
+    print(f"SBP Variance : {sbp_variance:.2f} mmHg²")
+    print(f"SBP Std Dev  : {sbp_std:.2f} mmHg")
+
+    print()
+
+    print(f"DBP MAE      : {dbp_mae:.2f} mmHg")
+    print(f"DBP Variance : {dbp_variance:.2f} mmHg²")
+    print(f"DBP Std Dev  : {dbp_std:.2f} mmHg")
+
+    # ==========================================
+    # SBP MAE Distribution
+    # ==========================================
+
+    plt.figure(figsize=(8, 5))
+
+    plt.hist(
+        sbp_errors,
+        bins=50,
+        alpha=0.7
+    )
+
+    plt.axvline(
+        sbp_mae,
+        linestyle="--",
+        linewidth=2,
+        label=f"MAE = {sbp_mae:.2f} mmHg"
+    )
+
+    plt.xlabel("Absolute Error (mmHg)")
+    plt.ylabel("Number of Samples")
+
+    plt.title(
+        "SBP Absolute Error Distribution"
+    )
+
+    plt.legend()
+    plt.grid(
+        True,
+        alpha=0.3
+    )
+
+    plt.show()
+
+    # ==========================================
+    # DBP MAE Distribution
+    # ==========================================
+
+    plt.figure(figsize=(8, 5))
+
+    plt.hist(
+        dbp_errors,
+        bins=50,
+        alpha=0.7
+    )
+
+    plt.axvline(
+        dbp_mae,
+        linestyle="--",
+        linewidth=2,
+        label=f"MAE = {dbp_mae:.2f} mmHg"
+    )
+
+    plt.xlabel("Absolute Error (mmHg)")
+    plt.ylabel("Number of Samples")
+
+    plt.title(
+        "DBP Absolute Error Distribution"
+    )
+
+    plt.legend()
+    plt.grid(
+        True,
+        alpha=0.3
+    )
+
+    plt.show()
+
+
+
+import os
+import glob
+import numpy as np
+import torch
+
+from torch.utils.data import Dataset, DataLoader
+
+
+class VitalDBCheckpointDataset(Dataset):
+
+    def __init__(self, checkpoint_dir):
+
+        self.files = sorted(
+            glob.glob(
+                os.path.join(
+                    checkpoint_dir,
+                    "case_*.npz"
+                )
+            )
+        )
+
+        if len(self.files) == 0:
+
+            raise ValueError(
+                f"No checkpoint files found in: "
+                f"{checkpoint_dir}"
+            )
+
+        print(
+            "Checkpoint files found:",
+            len(self.files)
+        )
+
+        # -----------------------------------------
+        # Determine number of samples per case
+        # -----------------------------------------
+
+        self.lengths = []
+
+        for file_path in self.files:
+
+            data = np.load(
+                file_path
+            )
+
+            self.lengths.append(
+                len(data["X"])
+            )
+
+        # -----------------------------------------
+        # Cumulative index
+        # -----------------------------------------
+
+        self.cumulative_lengths = np.cumsum(
+            self.lengths
+        )
+
+        self.total_samples = int(
+            self.cumulative_lengths[-1]
+        )
+
+        print(
+            "Total test windows:",
+            self.total_samples
+        )
+
+    def __len__(self):
+
+        return self.total_samples
+
+    def __getitem__(self, idx):
+
+        # -----------------------------------------
+        # Find which case contains this sample
+        # -----------------------------------------
+
+        file_idx = np.searchsorted(
+            self.cumulative_lengths,
+            idx,
+            side="right"
+        )
+
+        if file_idx == 0:
+
+            local_idx = idx
+
+        else:
+
+            local_idx = (
+                idx -
+                self.cumulative_lengths[file_idx - 1]
+            )
+
+        file_path = self.files[file_idx]
+
+        # -----------------------------------------
+        # Load case
+        # -----------------------------------------
+
+        data = np.load(
+            file_path
+        )
+
+        X = data["X"][local_idx]
+        y = data["y"][local_idx]
+
+        # -----------------------------------------
+        # Add channel dimension
+        # -----------------------------------------
+
+        X = X[None, :]
+
+        # -----------------------------------------
+        # Convert to tensors
+        # -----------------------------------------
+
+        X = torch.tensor(
+            X,
+            dtype=torch.float32
+        )
+
+        y = torch.tensor(
+            y,
+            dtype=torch.float32
+        )
+
+        return X, y
+
+
+def load_vitaldb_test_loader(
+    checkpoint_dir="/data1/yashvi_bhuva/BP_estimation_using_PPG/VitalDB/vitaldb_checkpoints",
+    batch_size=256,
+    num_workers=4
+):
+
+    test_dataset = VitalDBCheckpointDataset(
+        checkpoint_dir
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    print(
+        "Number of test samples:",
+        len(test_dataset)
+    )
+
+    print(
+        "Number of test batches:",
+        len(test_loader)
+    )
+
+    return test_loader
