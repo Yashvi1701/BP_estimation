@@ -2,6 +2,9 @@ import numpy as np
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from tqdm import tqdm
+import copy
+import numpy as np
+import torch
 
 
 def train_model(
@@ -14,8 +17,7 @@ def train_model(
     epochs=50,
     scheduler=None,
     patience=10,
-    min_delta=0.01,
-    save_path="best_model.pt"
+    min_delta=0.01
 ):
 
     train_losses = []
@@ -34,6 +36,8 @@ def train_model(
     best_val_loss = float("inf")
     patience_counter = 0
 
+    # Keep best model in RAM
+    best_model_state = None
 
     for epoch in range(epochs):
 
@@ -46,7 +50,6 @@ def train_model(
         running_loss = 0.0
         running_sbp_loss = 0.0
         running_dbp_loss = 0.0
-
 
         for X_batch, y_batch in train_loader:
 
@@ -89,7 +92,6 @@ def train_model(
             running_sbp_loss += sbp_loss.item()
             running_dbp_loss += dbp_loss.item()
 
-
         # =====================
         # Training Metrics
         # =====================
@@ -109,7 +111,6 @@ def train_model(
             len(train_loader)
         )
 
-
         # =====================
         # Validation
         # =====================
@@ -119,7 +120,6 @@ def train_model(
         val_loss = 0.0
         val_sbp_loss = 0.0
         val_dbp_loss = 0.0
-
 
         with torch.no_grad():
 
@@ -158,7 +158,6 @@ def train_model(
                 val_sbp_loss += sbp_loss.item()
                 val_dbp_loss += dbp_loss.item()
 
-
         # =====================
         # Validation Metrics
         # =====================
@@ -169,14 +168,13 @@ def train_model(
 
         val_dbp_loss /= len(val_loader)
 
-
         # =====================
         # Scheduler
         # =====================
 
         if scheduler is not None:
-            scheduler.step(val_loss)
 
+            scheduler.step(val_loss)
 
         # =====================
         # Store Losses
@@ -190,7 +188,6 @@ def train_model(
 
         val_sbp_losses.append(val_sbp_loss)
         val_dbp_losses.append(val_dbp_loss)
-
 
         # =====================
         # RMSE
@@ -212,7 +209,6 @@ def train_model(
             val_dbp_loss
         )
 
-
         # =====================
         # Early Stopping
         # =====================
@@ -225,16 +221,17 @@ def train_model(
 
             patience_counter = 0
 
-            torch.save(
-                model.state_dict(),
-                save_path
+            # ---------------------------------
+            # Save best weights ONLY IN RAM
+            # ---------------------------------
+
+            best_model_state = copy.deepcopy(
+                model.state_dict()
             )
 
             improvement_status = "Improved"
 
         else:
-
-            # No meaningful improvement
 
             patience_counter += 1
 
@@ -242,7 +239,6 @@ def train_model(
                 f"No improvement "
                 f"({patience_counter}/{patience})"
             )
-
 
         # =====================
         # Print
@@ -258,7 +254,6 @@ def train_model(
             f"DBP RMSE: {val_dbp_rmse:.2f}) | "
             f"{improvement_status}"
         )
-
 
         # =====================
         # Stop Training
@@ -278,27 +273,24 @@ def train_model(
 
             break
 
-
     # =====================
-    # Load Best Model
+    # Restore Best Model
     # =====================
 
-    model.load_state_dict(
-        torch.load(
-            save_path,
-            map_location=device
+    if best_model_state is not None:
+
+        model.load_state_dict(
+            best_model_state
         )
-    )
 
-    print(
-        "\nBest model loaded successfully."
-    )
+        print(
+            "\nBest model restored from memory."
+        )
 
-    print(
-        f"Best validation loss: "
-        f"{best_val_loss:.4f}"
-    )
-
+        print(
+            f"Best validation loss: "
+            f"{best_val_loss:.4f}"
+        )
 
     # =====================
     # History
@@ -319,13 +311,14 @@ def train_model(
         "val_dbp_loss": val_dbp_losses
     }
 
-
     return (
         model,
         history,
         train_losses,
         val_losses
     )
+
+
 from matplotlib import pyplot as plt
 
 
@@ -463,54 +456,7 @@ def evaluate_model(model, test_loader, device):
         unbiased=False
     ).item()
 
-    # =========================================
-    # Print results
-    # =========================================
-
-    print(
-        "\n================================"
-        " TEST RESULTS "
-        "================================"
-    )
-
-    print(
-        f"SBP MAE      : {test_sbp_mae:.2f} mmHg"
-    )
-
-    print(
-        f"SBP RMSE     : {test_sbp_rmse:.2f} mmHg"
-    )
-
-    print(
-        f"SBP Variance : {test_sbp_variance:.2f} mmHg²"
-    )
-
-    print(
-        f"SBP Std Dev  : {test_sbp_std:.2f} mmHg"
-    )
-
-    print()
-
-    print(
-        f"DBP MAE      : {test_dbp_mae:.2f} mmHg"
-    )
-
-    print(
-        f"DBP RMSE     : {test_dbp_rmse:.2f} mmHg"
-    )
-
-    print(
-        f"DBP Variance : {test_dbp_variance:.2f} mmHg²"
-    )
-
-    print(
-        f"DBP Std Dev  : {test_dbp_std:.2f} mmHg"
-    )
-
-    # =========================================
-    # Return results
-    # =========================================
-
+    
     return {
         "sbp_mae": test_sbp_mae,
         "sbp_rmse": test_sbp_rmse,
@@ -918,6 +864,7 @@ def plot_mae(results):
     print(f"DBP Variance : {dbp_variance:.2f} mmHg²")
     print(f"DBP Std Dev  : {dbp_std:.2f} mmHg")
 
+
     # ==========================================
     # SBP MAE Distribution
     # ==========================================
@@ -945,12 +892,14 @@ def plot_mae(results):
     )
 
     plt.legend()
+
     plt.grid(
         True,
         alpha=0.3
     )
 
     plt.show()
+
 
     # ==========================================
     # DBP MAE Distribution
@@ -979,6 +928,7 @@ def plot_mae(results):
     )
 
     plt.legend()
+
     plt.grid(
         True,
         alpha=0.3
@@ -986,6 +936,239 @@ def plot_mae(results):
 
     plt.show()
 
+
+    # ==========================================================
+    # SBP MAE BY TRUE SBP RANGE
+    # ==========================================================
+
+    true_sbp = targets[:, 0]
+
+    # SBP bins
+    sbp_bins = [
+        60, 80, 100, 120, 140,
+        160, 180, 200, 220, 240, 260
+    ]
+
+    sbp_labels = [
+        "60–80",
+        "80–100",
+        "100–120",
+        "120–140",
+        "140–160",
+        "160–180",
+        "180–200",
+        "200–220",
+        "220–240",
+        "240–260"
+    ]
+
+    sbp_bin_mae = []
+    sbp_bin_counts = []
+
+    for i in range(len(sbp_bins) - 1):
+
+        lower = sbp_bins[i]
+        upper = sbp_bins[i + 1]
+
+        mask = (
+            (true_sbp >= lower) &
+            (true_sbp < upper)
+        )
+
+        count = np.sum(mask)
+
+        sbp_bin_counts.append(count)
+
+        if count == 0:
+            sbp_bin_mae.append(np.nan)
+        else:
+            sbp_bin_mae.append(
+                np.mean(sbp_errors[mask])
+            )
+
+
+    # ==========================================
+    # Print SBP bin statistics
+    # ==========================================
+
+    print("\n================================")
+    print("SBP MAE BY TRUE SBP RANGE")
+    print("================================")
+
+    for label, count, mae in zip(
+        sbp_labels,
+        sbp_bin_counts,
+        sbp_bin_mae
+    ):
+
+        if np.isnan(mae):
+            print(
+                f"{label} mmHg "
+                f"| Samples: {count:6d} "
+                f"| MAE: N/A"
+            )
+        else:
+            print(
+                f"{label} mmHg "
+                f"| Samples: {count:6d} "
+                f"| MAE: {mae:.2f} mmHg"
+            )
+
+
+    # ==========================================
+    # Plot SBP bin MAE
+    # ==========================================
+
+    plt.figure(figsize=(10, 5))
+
+    plt.bar(
+        sbp_labels,
+        sbp_bin_mae
+    )
+
+    plt.axhline(
+        sbp_mae,
+        linestyle="--",
+        linewidth=2,
+        label=f"Overall MAE = {sbp_mae:.2f} mmHg"
+    )
+
+    plt.xlabel("True SBP Range (mmHg)")
+    plt.ylabel("MAE (mmHg)")
+
+    plt.title(
+        "SBP MAE Across Blood Pressure Ranges"
+    )
+
+    plt.legend()
+
+    plt.grid(
+        axis="y",
+        alpha=0.3
+    )
+
+    plt.tight_layout()
+
+    plt.show()
+
+
+    # ==========================================================
+    # DBP MAE BY TRUE DBP RANGE
+    # ==========================================================
+
+    true_dbp = targets[:, 1]
+
+    # DBP bins
+    dbp_bins = [
+        20, 30, 40, 50, 60, 70,
+        80, 90, 100, 110, 120,
+        130, 140, 150
+    ]
+
+    dbp_labels = [
+        "20–30",
+        "30–40",
+        "40–50",
+        "50–60",
+        "60–70",
+        "70–80",
+        "80–90",
+        "90–100",
+        "100–110",
+        "110–120",
+        "120–130",
+        "130–140",
+        "140–150"
+    ]
+
+    dbp_bin_mae = []
+    dbp_bin_counts = []
+
+    for i in range(len(dbp_bins) - 1):
+
+        lower = dbp_bins[i]
+        upper = dbp_bins[i + 1]
+
+        mask = (
+            (true_dbp >= lower) &
+            (true_dbp < upper)
+        )
+
+        count = np.sum(mask)
+
+        dbp_bin_counts.append(count)
+
+        if count == 0:
+            dbp_bin_mae.append(np.nan)
+        else:
+            dbp_bin_mae.append(
+                np.mean(dbp_errors[mask])
+            )
+
+
+    # ==========================================
+    # Print DBP bin statistics
+    # ==========================================
+
+    print("\n================================")
+    print("DBP MAE BY TRUE DBP RANGE")
+    print("================================")
+
+    for label, count, mae in zip(
+        dbp_labels,
+        dbp_bin_counts,
+        dbp_bin_mae
+    ):
+
+        if np.isnan(mae):
+            print(
+                f"{label} mmHg "
+                f"| Samples: {count:6d} "
+                f"| MAE: N/A"
+            )
+        else:
+            print(
+                f"{label} mmHg "
+                f"| Samples: {count:6d} "
+                f"| MAE: {mae:.2f} mmHg"
+            )
+
+
+    # ==========================================
+    # Plot DBP bin MAE
+    # ==========================================
+
+    plt.figure(figsize=(11, 5))
+
+    plt.bar(
+        dbp_labels,
+        dbp_bin_mae
+    )
+
+    plt.axhline(
+        dbp_mae,
+        linestyle="--",
+        linewidth=2,
+        label=f"Overall MAE = {dbp_mae:.2f} mmHg"
+    )
+
+    plt.xlabel("True DBP Range (mmHg)")
+    plt.ylabel("MAE (mmHg)")
+
+    plt.title(
+        "DBP MAE Across Blood Pressure Ranges"
+    )
+
+    plt.legend()
+
+    plt.grid(
+        axis="y",
+        alpha=0.3
+    )
+
+    plt.tight_layout()
+
+    plt.show()
 
 
 import os
@@ -1010,7 +1193,6 @@ class VitalDBCheckpointDataset(Dataset):
         )
 
         if len(self.files) == 0:
-
             raise ValueError(
                 f"No checkpoint files found in: "
                 f"{checkpoint_dir}"
@@ -1022,23 +1204,21 @@ class VitalDBCheckpointDataset(Dataset):
         )
 
         # -----------------------------------------
-        # Determine number of samples per case
+        # Store number of windows in each case
         # -----------------------------------------
 
         self.lengths = []
 
         for file_path in self.files:
 
-            data = np.load(
-                file_path
-            )
+            data = np.load(file_path)
 
             self.lengths.append(
                 len(data["X"])
             )
 
         # -----------------------------------------
-        # Cumulative index
+        # Cumulative lengths
         # -----------------------------------------
 
         self.cumulative_lengths = np.cumsum(
@@ -1087,15 +1267,14 @@ class VitalDBCheckpointDataset(Dataset):
         # Load case
         # -----------------------------------------
 
-        data = np.load(
-            file_path
-        )
+        data = np.load(file_path)
 
         X = data["X"][local_idx]
         y = data["y"][local_idx]
 
         # -----------------------------------------
         # Add channel dimension
+        # (1000,) -> (1, 1000)
         # -----------------------------------------
 
         X = X[None, :]
@@ -1119,14 +1298,22 @@ class VitalDBCheckpointDataset(Dataset):
 
 def load_vitaldb_test_loader(
     checkpoint_dir="/data1/yashvi_bhuva/BP_estimation_using_PPG/VitalDB/vitaldb_checkpoints",
-    batch_size=256,
+    batch_size=1024,
     num_workers=4
 ):
+
+    # =========================================
+    # Dataset
+    # =========================================
 
     test_dataset = VitalDBCheckpointDataset(
         checkpoint_dir
     )
 
+    # =========================================
+    # DataLoader
+    # =========================================
+    test_dataset =test_dataset[:10]
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
