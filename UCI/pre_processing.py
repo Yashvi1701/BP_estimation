@@ -140,8 +140,8 @@ def load_UCI_dataset(
     WINDOW_SIZE, 
     STEP_SIZE,
     data_path="/data1/yashvi_bhuva/BP_estimation_using_PPG/UCI/data",
-    test_size=0.2,
-    val_size=0.1,
+    test_size=0.1,
+    val_size=1/9,
     random_state=42,
     
 ):
