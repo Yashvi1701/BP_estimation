@@ -523,19 +523,56 @@ def select_f_test(X, y, k=15):
 
 
 
-def select_mrmr(X, y, k=15, random_state=42):
+import numpy as np
+import pandas as pd
 
+from sklearn.feature_selection import mutual_info_regression
+from skrebate import ReliefF
+
+
+# ============================================================
+# mRMR FEATURE SELECTION
+# ============================================================
+
+def select_mrmr(
+    X,
+    y,
+    k=15,
+    sample_size=50000,
+    random_state=42
+):
+    
     X = X.copy()
+    y = np.asarray(y, dtype=np.float64)
+
+    # --------------------------------------------------------
+    # 1. Sample training data for feature selection
+    # --------------------------------------------------------
+    
+    rng = np.random.RandomState(random_state)
+
+    n_samples = min(sample_size, len(X))
+
+    sample_indices = rng.choice(
+        len(X),
+        size=n_samples,
+        replace=False
+    )
+
+    X_sample = X.iloc[sample_indices]
+    y_sample = y[sample_indices]
+
+    print(f"mRMR: using {n_samples} samples for feature selection")
 
     # Convert to numpy
-    X_values = X.values.astype(np.float64)
-    y_values = np.asarray(y, dtype=np.float64)
+    X_values = X_sample.values.astype(np.float64)
+    y_values = y_sample.astype(np.float64)
 
     n_features = X_values.shape[1]
 
-    # -----------------------------------------
-    # 1. Relevance: MI(feature, target)
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # 2. Relevance: MI(feature, target)
+    # --------------------------------------------------------
 
     relevance = mutual_info_regression(
         X_values,
@@ -543,9 +580,9 @@ def select_mrmr(X, y, k=15, random_state=42):
         random_state=random_state
     )
 
-    # -----------------------------------------
-    # 2. MI between every pair of features
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # 3. MI between every pair of features
+    # --------------------------------------------------------
 
     redundancy = np.zeros(
         (n_features, n_features)
@@ -564,9 +601,9 @@ def select_mrmr(X, y, k=15, random_state=42):
             redundancy[i, j] = mi_ij
             redundancy[j, i] = mi_ij
 
-    # -----------------------------------------
-    # 3. Greedy mRMR selection
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # 4. Greedy mRMR selection
+    # --------------------------------------------------------
 
     selected = []
 
@@ -586,12 +623,13 @@ def select_mrmr(X, y, k=15, random_state=42):
         for candidate in remaining:
 
             # Average redundancy with
-            # already-selected features
+            # already selected features
             avg_redundancy = np.mean([
                 redundancy[candidate, s]
                 for s in selected
             ])
 
+            # mRMR score
             score = (
                 relevance[candidate]
                 - avg_redundancy
@@ -605,10 +643,18 @@ def select_mrmr(X, y, k=15, random_state=42):
         selected.append(best_feature)
         remaining.remove(best_feature)
 
+    # --------------------------------------------------------
+    # 5. Get selected feature names
+    # --------------------------------------------------------
+
     selected_features = [
         X.columns[i]
         for i in selected
     ]
+
+    # --------------------------------------------------------
+    # 6. Results table
+    # --------------------------------------------------------
 
     results = pd.DataFrame({
         "feature": X.columns,
@@ -623,7 +669,44 @@ def select_mrmr(X, y, k=15, random_state=42):
     return selected_features, results
 
 
-def select_reliefF(X, y, k=15, n_neighbors=100):
+# ============================================================
+# RELIEFF FEATURE SELECTION
+# ============================================================
+
+def select_reliefF(
+    X,
+    y,
+    k=15,
+    n_neighbors=100,
+    sample_size=50000,
+    random_state=42
+):
+
+    X = X.copy()
+    y = np.asarray(y)
+
+    # --------------------------------------------------------
+    # 1. Sample training data for feature selection
+    # --------------------------------------------------------
+
+    rng = np.random.RandomState(random_state)
+
+    n_samples = min(sample_size, len(X))
+
+    sample_indices = rng.choice(
+        len(X),
+        size=n_samples,
+        replace=False
+    )
+
+    X_sample = X.iloc[sample_indices]
+    y_sample = y[sample_indices]
+
+    print(f"ReliefF: using {n_samples} samples for feature selection")
+
+    # --------------------------------------------------------
+    # 2. ReliefF model
+    # --------------------------------------------------------
 
     model = ReliefF(
         n_neighbors=n_neighbors,
@@ -631,11 +714,14 @@ def select_reliefF(X, y, k=15, n_neighbors=100):
     )
 
     model.fit(
-        X.values,
-        np.asarray(y)
+        X_sample.values,
+        y_sample
     )
 
-    # Feature scores
+    # --------------------------------------------------------
+    # 3. Feature importance scores
+    # --------------------------------------------------------
+
     scores = model.feature_importances_
 
     # Sort from highest to lowest
@@ -645,6 +731,10 @@ def select_reliefF(X, y, k=15, n_neighbors=100):
         X.columns[i]
         for i in indices
     ]
+
+    # --------------------------------------------------------
+    # 4. Results table
+    # --------------------------------------------------------
 
     results = pd.DataFrame({
         "feature": X.columns,
