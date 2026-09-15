@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.feature_selection import f_regression
 from sklearn.feature_selection import mutual_info_regression
 
-from skrebate import ReliefF
+# from skrebate import RReliefF
 
 from scipy.signal import find_peaks, welch
 from scipy.stats import skew, kurtosis
@@ -527,7 +527,7 @@ import numpy as np
 import pandas as pd
 
 from sklearn.feature_selection import mutual_info_regression
-from skrebate import ReliefF
+# from skrebate import RReliefF
 
 
 # ============================================================
@@ -672,6 +672,11 @@ def select_mrmr(
 # ============================================================
 # RELIEFF FEATURE SELECTION
 # ============================================================
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import NearestNeighbors
+
 
 def select_reliefF(
     X,
@@ -681,15 +686,33 @@ def select_reliefF(
     sample_size=50000,
     random_state=42
 ):
+    """
+    Regression ReliefF (RReliefF) feature selection.
+
+    Parameters
+    ----------
+    X : pandas DataFrame
+        Training features only.
+    y : array-like
+        Continuous target (SBP or DBP).
+    k : int
+        Number of features to select.
+    n_neighbors : int
+        Number of nearest neighbours.
+    sample_size : int
+        Number of training samples used for feature selection.
+    random_state : int
+        Random seed.
+    """
 
     X = X.copy()
-    y = np.asarray(y)
-
-    # --------------------------------------------------------
-    # 1. Sample training data for feature selection
-    # --------------------------------------------------------
+    y = np.asarray(y, dtype=np.float64)
 
     rng = np.random.RandomState(random_state)
+
+    # --------------------------------------------------------
+    # Sample training data
+    # --------------------------------------------------------
 
     n_samples = min(sample_size, len(X))
 
@@ -699,50 +722,94 @@ def select_reliefF(
         replace=False
     )
 
-    X_sample = X.iloc[sample_indices]
+    X_sample = X.iloc[sample_indices].values.astype(np.float64)
     y_sample = y[sample_indices]
 
-    print(f"ReliefF: using {n_samples} samples for feature selection")
+    print(
+        f"RReliefF: using {n_samples} samples "
+        f"for feature selection"
+    )
 
     # --------------------------------------------------------
-    # 2. ReliefF model
+    # Standardize features
     # --------------------------------------------------------
 
-    model = ReliefF(
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_sample)
+
+    # --------------------------------------------------------
+    # Find nearest neighbours
+    # --------------------------------------------------------
+
+    n_neighbors = min(n_neighbors + 1, n_samples)
+
+    nn = NearestNeighbors(
         n_neighbors=n_neighbors,
-        n_features_to_select=k
+        metric="euclidean"
     )
 
-    model.fit(
-        X_sample.values,
-        y_sample
-    )
+    nn.fit(X_scaled)
+
+    distances, indices = nn.kneighbors(X_scaled)
+
+    # Remove self-neighbour
+    indices = indices[:, 1:]
+    distances = distances[:, 1:]
 
     # --------------------------------------------------------
-    # 3. Feature importance scores
+    # Calculate feature scores
     # --------------------------------------------------------
 
-    scores = model.feature_importances_
+    n_features = X_scaled.shape[1]
 
-    # Sort from highest to lowest
-    indices = np.argsort(scores)[::-1][:k]
+    scores = np.zeros(n_features)
+
+    # Normalize target differences
+    y_range = np.ptp(y_sample)
+
+    if y_range == 0:
+        raise ValueError("Target has zero variance.")
+
+    for i in range(n_samples):
+
+        neighbors = indices[i]
+
+        # Target differences
+        target_diff = (
+            np.abs(y_sample[i] - y_sample[neighbors])
+            / y_range
+        )
+
+        # Feature differences
+        feature_diff = np.abs(
+            X_scaled[i] - X_scaled[neighbors]
+        )
+
+        # Weight by target difference
+        scores += np.mean(
+            target_diff[:, None] * feature_diff,
+            axis=0
+        )
+
+    scores /= n_samples
+
+    # Higher score = more relevant
+    indices_sorted = np.argsort(scores)[::-1]
+
+    selected_indices = indices_sorted[:k]
 
     selected_features = [
         X.columns[i]
-        for i in indices
+        for i in selected_indices
     ]
-
-    # --------------------------------------------------------
-    # 4. Results table
-    # --------------------------------------------------------
 
     results = pd.DataFrame({
         "feature": X.columns,
-        "ReliefF_score": scores
+        "RReliefF_score": scores
     })
 
     results = results.sort_values(
-        "ReliefF_score",
+        "RReliefF_score",
         ascending=False
     ).reset_index(drop=True)
 
