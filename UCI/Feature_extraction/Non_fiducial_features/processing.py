@@ -819,7 +819,7 @@ def select_reliefF(
 import os
 import joblib
 
-SAVE_DIR = "data/selected_feature_sets"
+SAVE_DIR = "data"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 def save_feature_set(
