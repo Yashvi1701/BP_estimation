@@ -463,30 +463,46 @@ def extract_all_features(ppg, fs=125):
     return features
 
 
+from joblib import Parallel, delayed
+from tqdm import tqdm
+import pandas as pd
+import numpy as np
+
+
+def extract_features_single_sample(i, X, y, fs=125):
+
+    ppg = X[i, 0, :]
+
+    features = extract_all_features(
+        ppg,
+        fs
+    )
+
+    features["SBP"] = y[i, 0]
+    features["DBP"] = y[i, 1]
+
+    return features
+
+
 def extract_features_from_dataset(
     X,
     y,
-    fs=125
+    fs=125,
+    n_jobs=2
 ):
 
-    rows = []
-
-    for i in tqdm(range(len(X))):
-
-        ppg = X[i, 0, :]
-
-        features = extract_all_features(
-            ppg,
-            fs
+    results = Parallel(
+        n_jobs=n_jobs,
+        backend="loky",
+        verbose=0
+    )(
+        delayed(extract_features_single_sample)(
+            i, X, y, fs
         )
+        for i in range(len(X))
+    )
 
-        features["SBP"] = y[i, 0]
-        features["DBP"] = y[i, 1]
-
-        rows.append(features)
-
-    return pd.DataFrame(rows)
-
+    return pd.DataFrame(results)
 
 
 def select_f_test(X, y, k=15):
