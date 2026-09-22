@@ -9,3 +9,5 @@ wavelets_data_sym4/
 vitaldb_checkpoints/
 
 ConvTran/ConvTran/
+
+VitalDB/ML/non_fiducial_features/8sec_0overlap/vitaldb_zero_shot_test.npz
