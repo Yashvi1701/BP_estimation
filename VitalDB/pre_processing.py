@@ -93,7 +93,7 @@ def robust_minmax_normalize(ppg):
 
 from scipy.signal import butter, filtfilt
 
-def remove_baseline_wander(ppg, fs=125, cutoff=0.5, order=4):
+def remove_baseline_wander(ppg, fs=500, cutoff=0.5, order=4):
     """
     Remove low-frequency baseline wander from PPG.
 

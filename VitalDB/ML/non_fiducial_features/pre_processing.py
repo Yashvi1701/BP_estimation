@@ -8,6 +8,1005 @@ from tqdm import tqdm
 from scipy.stats import skew, kurtosis
 from scipy.signal import savgol_filter
 
+def process_vitaldb_dataset(
+    valid_df,
+    WINDOW_SIZE=WINDOW_SIZE,
+    STEP_SIZE=STEP_SIZE,
+    fs=500,
+    target_fs=125
+):
+
+    X_all = []
+    y_all = []
+
+    successful_cases = []
+    failed_cases = []
+
+    total_windows = 0
+
+    for case_id in tqdm(
+        valid_df["case_id"].tolist(),
+        desc="Processing VitalDB",
+        unit="case"
+    ):
+
+        X, y = process_vitaldb_recording(
+            case_id=case_id,
+            WINDOW_SIZE=WINDOW_SIZE,
+            STEP_SIZE=STEP_SIZE,
+            fs=fs,
+            target_fs=target_fs
+        )
+
+        if X is None:
+            failed_cases.append(case_id)
+            continue
+
+        X_all.append(X)
+        y_all.append(y)
+
+        successful_cases.append(case_id)
+
+        total_windows += len(X)
+
+    # -----------------------------------------
+    # Combine
+    # -----------------------------------------
+
+    if len(X_all) == 0:
+
+        raise ValueError(
+            "No valid windows were generated."
+        )
+
+    X_all = np.concatenate(
+        X_all,
+        axis=0
+    )
+
+    y_all = np.concatenate(
+        y_all,
+        axis=0
+    )
+
+    print("\n================================")
+    print("VitalDB preprocessing complete")
+    print("================================")
+
+    print(
+        "Successful cases:",
+        len(successful_cases)
+    )
+
+    print(
+        "Failed cases:",
+        len(failed_cases)
+    )
+
+    print(
+        "Total windows:",
+        len(X_all)
+    )
+
+    print(
+        "X shape:",
+        X_all.shape
+    )
+
+    print(
+        "y shape:",
+        y_all.shape
+    )
+
+    return (
+        X_all,
+        y_all,
+        successful_cases,
+        failed_cases
+    )
+
+def extract_bp_from_abp(abp_window, fs=500):
+
+    # -----------------------------------------
+    # Basic ART quality check
+    # -----------------------------------------
+
+    if not np.isfinite(abp_window).all():
+        return None, None
+
+    # Very flat signal
+    if np.ptp(abp_window) < 20:
+        return None, None
+
+    # -----------------------------------------
+    # Find systolic peaks
+    # -----------------------------------------
+
+    peaks, _ = find_peaks(
+        abp_window,
+        distance=int(0.4 * fs),
+        prominence=10
+    )
+
+    # Need at least 2 beats
+    if len(peaks) < 2:
+        return None, None
+
+    # -----------------------------------------
+    # SBP
+    # -----------------------------------------
+
+    sbp_values = abp_window[peaks]
+
+    # -----------------------------------------
+    # DBP
+    # -----------------------------------------
+
+    dbp_values = []
+
+    for i in range(len(peaks) - 1):
+
+        beat_segment = abp_window[
+            peaks[i]:peaks[i + 1]
+        ]
+
+        if len(beat_segment) > 0:
+
+            dbp_values.append(
+                np.min(beat_segment)
+            )
+
+    if len(dbp_values) == 0:
+        return None, None
+
+    # -----------------------------------------
+    # Median across beats
+    # -----------------------------------------
+
+    sbp = np.median(sbp_values)
+    dbp = np.median(dbp_values)
+
+    # -----------------------------------------
+    # Physiological range
+    # -----------------------------------------
+
+    if not np.isfinite(sbp):
+        return None, None
+
+    if not np.isfinite(dbp):
+        return None, None
+
+    if sbp < 50 or sbp > 250:
+        return None, None
+
+    if dbp < 20 or dbp > 150:
+        return None, None
+
+    return sbp, dbp
+
+import vitaldb
+
+from scipy.signal import find_peaks, resample_poly
+
+def downsample_signal(signal):
+
+    return resample_poly(
+        signal,
+        up=1,
+        down=4
+    )
+
+from scipy.signal import butter, filtfilt
+
+def remove_baseline_wander(ppg, fs=500, cutoff=0.5, order=4):
+    """
+    Remove low-frequency baseline wander from PPG.
+
+    ppg: 1D numpy array
+    fs: sampling frequency
+    cutoff: baseline cutoff frequency in Hz
+    """
+
+    nyquist = fs / 2
+    normal_cutoff = cutoff / nyquist
+
+    b, a = butter(
+        order,
+        normal_cutoff,
+        btype='low'
+    )
+
+    baseline = filtfilt(b, a, ppg)
+
+    corrected_ppg = ppg - baseline
+
+    return corrected_ppg
+
+
+def robust_minmax_normalize(ppg):
+
+    p_low = np.percentile(ppg, 1)
+    p_high = np.percentile(ppg, 99)
+
+    if p_high == p_low:
+        return None
+
+    ppg = (ppg - p_low) / (p_high - p_low)
+
+    # Clip extreme noise/outliers
+    ppg = np.clip(ppg, 0, 1)
+
+    return ppg
+def process_vitaldb_recording(
+    case_id,
+    WINDOW_SIZE=WINDOW_SIZE,
+    STEP_SIZE=STEP_SIZE,
+    fs=500,
+    target_fs=125
+):
+
+    try:
+
+        # =========================================
+        # Load case
+        # =========================================
+
+        vf = vitaldb.VitalFile(case_id)
+
+        tracks = vf.trks
+
+        # =========================================
+        # Check required tracks
+        # =========================================
+
+        if "SNUADC/PLETH" not in tracks:
+            return None, None
+
+        if "SNUADC/ART" not in tracks:
+            return None, None
+
+        ppg_track = tracks["SNUADC/PLETH"]
+        art_track = tracks["SNUADC/ART"]
+
+        # =========================================
+        # Check sampling rates
+        # =========================================
+
+        ppg_fs = float(ppg_track.srate)
+        art_fs = float(art_track.srate)
+
+        if ppg_fs != fs:
+            return None, None
+
+        if art_fs != fs:
+            return None, None
+
+        # =========================================
+        # Check records
+        # =========================================
+
+        if len(ppg_track.recs) == 0:
+            return None, None
+
+        if len(art_track.recs) == 0:
+            return None, None
+
+        # =========================================
+        # Get first record
+        # =========================================
+
+        ppg_rec = ppg_track.recs[0]
+        art_rec = art_track.recs[0]
+
+        ppg = np.asarray(
+            ppg_rec["val"],
+            dtype=np.float32
+        )
+
+        art_raw = np.asarray(
+            art_rec["val"],
+            dtype=np.float32
+        )
+
+        art = (
+            art_raw * float(art_track.gain)
+            + float(art_track.offset)
+        )
+
+        # =========================================
+        # Align using timestamps
+        # =========================================
+
+        ppg_start = float(ppg_rec["dt"])
+        art_start = float(art_rec["dt"])
+
+        start_time = max(
+            ppg_start,
+            art_start
+        )
+
+        ppg_start_idx = int(
+            round(
+                (start_time - ppg_start) * fs
+            )
+        )
+
+        art_start_idx = int(
+            round(
+                (start_time - art_start) * fs
+            )
+        )
+
+        ppg = ppg[ppg_start_idx:]
+        art = art[art_start_idx:]
+
+        # =========================================
+        # Make same length
+        # =========================================
+
+        n = min(
+            len(ppg),
+            len(art)
+        )
+
+        ppg = ppg[:n]
+        art = art[:n]
+        ppg = remove_baseline_wander(ppg)
+        ppg = robust_minmax_normalize(ppg)
+
+        # =========================================
+        # Recording too short?
+        # =========================================
+
+        if n < WINDOW_SIZE:
+            return None, None
+
+        # =========================================
+        # Normalize PPG
+        # =========================================
+
+        valid_ppg = ppg[
+            np.isfinite(ppg)
+        ]
+
+        if len(valid_ppg) == 0:
+            return None, None
+
+        ppg_mean = np.mean(valid_ppg)
+        ppg_std = np.std(valid_ppg)
+
+        if ppg_std == 0 or not np.isfinite(ppg_std):
+            return None, None
+
+        
+
+        # =========================================
+        # Windowing
+        # =========================================
+
+        X = []
+        y = []
+
+        for start in range(
+            0,
+            n - WINDOW_SIZE + 1,
+            STEP_SIZE
+        ):
+
+            # -------------------------------------
+            # Extract windows
+            # -------------------------------------
+
+            ppg_window = ppg[
+                start:start + WINDOW_SIZE
+            ]
+
+            art_window = art[
+                start:start + WINDOW_SIZE
+            ]
+
+            # -------------------------------------
+            # NaN / invalid value check
+            # -------------------------------------
+
+            if not np.isfinite(ppg_window).all():
+                continue
+
+            if not np.isfinite(art_window).all():
+                continue
+
+            # -------------------------------------
+            # Extract SBP / DBP
+            # -------------------------------------
+
+            sbp, dbp = extract_bp_from_abp(
+                art_window,
+                fs=fs
+            )
+
+            # No valid peaks / BP
+            if sbp is None or dbp is None:
+                continue
+
+            # -------------------------------------
+            # SBP / DBP range check
+            # -------------------------------------
+
+            if sbp < 50 or sbp > 250:
+                continue
+
+            if dbp < 20 or dbp > 150:
+                continue
+
+            # -------------------------------------
+            # Downsample PPG
+            # -------------------------------------
+
+            ppg_window_125 = downsample_signal(
+                ppg_window,
+            )
+
+            # -------------------------------------
+            # Check expected size
+            # -------------------------------------
+
+            if len(ppg_window_125) != 1000:
+                continue
+
+            # -------------------------------------
+            # Store
+            # -------------------------------------
+
+            X.append(ppg_window_125)
+
+            y.append([
+                sbp,
+                dbp
+            ])
+
+        # =========================================
+        # No valid windows
+        # =========================================
+
+        if len(X) == 0:
+            return None, None
+
+        # =========================================
+        # Return
+        # =========================================
+
+        return (
+            np.asarray(X, dtype=np.float32),
+            np.asarray(y, dtype=np.float32)
+        )
+
+    except Exception as e:
+
+        print(
+            f"Error processing case {case_id}: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        return None, None
+
+import os
+import time
+import numpy as np
+
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    as_completed
+)
+
+from tqdm import tqdm
+
+
+# ============================================================
+# Worker
+# ============================================================
+
+def process_single_case(args):
+
+    case_id, WINDOW_SIZE, STEP_SIZE, fs, target_fs = args
+
+    X, y = process_vitaldb_recording(
+        case_id=case_id,
+        WINDOW_SIZE=WINDOW_SIZE,
+        STEP_SIZE=STEP_SIZE,
+        fs=fs,
+        target_fs=target_fs
+    )
+
+    return case_id, X, y
+
+
+# ============================================================
+# Main dataset processing
+# ============================================================
+
+def process_vitaldb_dataset(
+    valid_df,
+    WINDOW_SIZE=WINDOW_SIZE,
+    STEP_SIZE=STEP_SIZE,
+    fs=500,
+    target_fs=125,
+    num_workers=10,
+    output_dir="vitaldb_checkpoints",
+    timeout_per_case=120
+):
+
+    os.makedirs(
+        output_dir,
+        exist_ok=True
+    )
+
+    case_ids = valid_df["case_id"].tolist()
+
+    # ========================================================
+    # Check already processed cases
+    # ========================================================
+
+    completed_cases = set()
+
+    for filename in os.listdir(output_dir):
+
+        if filename.endswith(".npz"):
+
+            try:
+
+                case_id = int(
+                    filename.replace(
+                        "case_", ""
+                    ).replace(
+                        ".npz", ""
+                    )
+                )
+
+                completed_cases.add(case_id)
+
+            except ValueError:
+                pass
+
+    remaining_cases = [
+        case_id
+        for case_id in case_ids
+        if case_id not in completed_cases
+    ]
+
+    print("\n================================")
+    print("VitalDB Processing")
+    print("================================")
+
+    print(
+        "Total cases:",
+        len(case_ids)
+    )
+
+    print(
+        "Already completed:",
+        len(completed_cases)
+    )
+
+    print(
+        "Remaining:",
+        len(remaining_cases)
+    )
+
+    if len(remaining_cases) == 0:
+
+        print(
+            "\nAll cases already processed!"
+        )
+
+    else:
+
+        # ====================================================
+        # Prepare arguments
+        # ====================================================
+
+        args_list = [
+            (
+                case_id,
+                WINDOW_SIZE,
+                STEP_SIZE,
+                fs,
+                target_fs
+            )
+            for case_id in remaining_cases
+        ]
+
+        # ====================================================
+        # Process in batches
+        #
+        # Important:
+        # We don't submit all 3238 cases at once.
+        # ====================================================
+
+        batch_size = num_workers * 2
+
+        for batch_start in range(
+            0,
+            len(args_list),
+            batch_size
+        ):
+
+            batch = args_list[
+                batch_start:
+                batch_start + batch_size
+            ]
+
+            print(
+                f"\nProcessing batch "
+                f"{batch_start + 1}-"
+                f"{batch_start + len(batch)}"
+            )
+
+            executor = ProcessPoolExecutor(
+                max_workers=num_workers
+            )
+
+            futures = {}
+
+            start_times = {}
+
+            for args in batch:
+
+                future = executor.submit(
+                    process_single_case,
+                    args
+                )
+
+                futures[future] = args[0]
+
+                start_times[future] = time.time()
+
+            finished = set()
+
+            try:
+
+                while len(finished) < len(futures):
+
+                    # ----------------------------------------
+                    # Check completed futures
+                    # ----------------------------------------
+
+                    for future in list(futures):
+
+                        if future in finished:
+                            continue
+
+                        if not future.done():
+                            continue
+
+                        case_id = futures[future]
+
+                        finished.add(future)
+
+                        try:
+
+                            returned_case_id, X, y = (
+                                future.result()
+                            )
+
+                            # --------------------------------
+                            # Failed case
+                            # --------------------------------
+
+                            if X is None:
+
+                                print(
+                                    f"\nCase {case_id}: "
+                                    f"no valid windows"
+                                )
+
+                                continue
+
+                            # --------------------------------
+                            # Save immediately
+                            # --------------------------------
+
+                            save_path = os.path.join(
+                                output_dir,
+                                f"case_{case_id}.npz"
+                            )
+
+                            np.savez_compressed(
+                                save_path,
+                                X=X,
+                                y=y,
+                                case_id=case_id
+                            )
+
+                            print(
+                                f"\nSaved case {case_id}: "
+                                f"{len(X)} windows"
+                            )
+
+                        except Exception as e:
+
+                            print(
+                                f"\nError processing "
+                                f"case {case_id}: "
+                                f"{type(e).__name__}: {e}"
+                            )
+
+                    # ----------------------------------------
+                    # Check for timeout
+                    # ----------------------------------------
+
+                    now = time.time()
+
+                    timed_out = []
+
+                    for future in futures:
+
+                        if future in finished:
+                            continue
+
+                        elapsed = (
+                            now -
+                            start_times[future]
+                        )
+
+                        if elapsed > timeout_per_case:
+
+                            timed_out.append(
+                                futures[future]
+                            )
+
+                    # ----------------------------------------
+                    # Kill pool if a worker is stuck
+                    # ----------------------------------------
+
+                    if len(timed_out) > 0:
+
+                        print(
+                            "\n================================"
+                        )
+
+                        print(
+                            "TIMEOUT DETECTED"
+                        )
+
+                        print(
+                            "Stuck cases:",
+                            timed_out
+                        )
+
+                        print(
+                            "Stopping current worker pool..."
+                        )
+
+                        print(
+                            "Completed cases have already "
+                            "been saved."
+                        )
+
+                        print(
+                            "================================"
+                        )
+
+                        # ------------------------------------
+                        # Cancel futures that haven't started
+                        # ------------------------------------
+
+                        for future in futures:
+
+                            if not future.done():
+
+                                future.cancel()
+
+                        # ------------------------------------
+                        # Terminate worker processes
+                        # ------------------------------------
+
+                        for process in executor._processes.values():
+
+                            if process.is_alive():
+
+                                process.terminate()
+
+                        executor.shutdown(
+                            wait=False,
+                            cancel_futures=True
+                        )
+
+                        # ------------------------------------
+                        # Stop this batch
+                        # ------------------------------------
+
+                        break
+
+                    time.sleep(0.5)
+
+            finally:
+
+                # =================================================
+                # Normal shutdown
+                # =================================================
+
+                if not any(
+                    not f.done()
+                    for f in futures
+                ):
+
+                    executor.shutdown(
+                        wait=True
+                    )
+
+    # ============================================================
+    # Load all successfully processed cases
+    # ============================================================
+
+    print(
+        "\n================================"
+    )
+
+    print(
+        "Loading saved cases..."
+    )
+
+    print(
+        "================================"
+    )
+
+    X_all = []
+    y_all = []
+    successful_cases = []
+
+    for case_id in case_ids:
+
+        save_path = os.path.join(
+            output_dir,
+            f"case_{case_id}.npz"
+        )
+
+        if not os.path.exists(save_path):
+            continue
+
+        try:
+
+            data = np.load(
+                save_path
+            )
+
+            X = data["X"]
+            y = data["y"]
+
+            if len(X) == 0:
+                continue
+
+            X_all.append(X)
+            y_all.append(y)
+
+            successful_cases.append(
+                case_id
+            )
+
+        except Exception as e:
+
+            print(
+                f"Could not load case {case_id}: "
+                f"{e}"
+            )
+
+    # ============================================================
+    # Combine
+    # ============================================================
+
+    if len(X_all) == 0:
+
+        raise ValueError(
+            "No successfully processed cases found."
+        )
+
+    X_all = np.concatenate(
+        X_all,
+        axis=0
+    )
+
+    y_all = np.concatenate(
+        y_all,
+        axis=0
+    )
+
+    # ============================================================
+    # Failed cases
+    # ============================================================
+
+    successful_set = set(
+        successful_cases
+    )
+
+    failed_cases = [
+        case_id
+        for case_id in case_ids
+        if case_id not in successful_set
+    ]
+
+    # ============================================================
+    # Final statistics
+    # ============================================================
+
+    print(
+        "\n================================"
+    )
+
+    print(
+        "VitalDB preprocessing complete"
+    )
+
+    print(
+        "================================"
+    )
+
+    print(
+        "Successful cases:",
+        len(successful_cases)
+    )
+
+    print(
+        "Failed cases:",
+        len(failed_cases)
+    )
+
+    print(
+        "Total windows:",
+        len(X_all)
+    )
+
+    print(
+        "X shape:",
+        X_all.shape
+    )
+
+    print(
+        "y shape:",
+        y_all.shape
+    )
+
+    # ============================================================
+    # Save final combined dataset
+    # ============================================================
+
+    np.savez_compressed(
+        "vitaldb_zero_shot_test.npz",
+        X=X_all,
+        y=y_all,
+        case_ids=np.array(
+            successful_cases
+        )
+    )
+
+    print(
+        "\nFinal dataset saved to:"
+    )
+
+    print(
+        "vitaldb_zero_shot_test.npz"
+    )
+
+    return (
+        X_all,
+        y_all,
+        successful_cases,
+        failed_cases
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def extract_nonfiducial_features(signal):
 
