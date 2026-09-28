@@ -10,8 +10,8 @@ from scipy.signal import savgol_filter
 
 def process_vitaldb_dataset(
     valid_df,
-    WINDOW_SIZE=WINDOW_SIZE,
-    STEP_SIZE=STEP_SIZE,
+    WINDOW_SIZE,
+    STEP_SIZE,
     fs=500,
     target_fs=125
 ):
@@ -239,8 +239,8 @@ def robust_minmax_normalize(ppg):
     return ppg
 def process_vitaldb_recording(
     case_id,
-    WINDOW_SIZE=WINDOW_SIZE,
-    STEP_SIZE=STEP_SIZE,
+    WINDOW_SIZE,
+    STEP_SIZE,
     fs=500,
     target_fs=125
 ):
@@ -526,8 +526,8 @@ def process_single_case(args):
 
 def process_vitaldb_dataset(
     valid_df,
-    WINDOW_SIZE=WINDOW_SIZE,
-    STEP_SIZE=STEP_SIZE,
+    WINDOW_SIZE,
+    STEP_SIZE,
     fs=500,
     target_fs=125,
     num_workers=10,
