@@ -10,5 +10,7 @@ vitaldb_checkpoints/
 vitaldb_zero_shot_test.npz/
 
 ConvTran/ConvTran/
-
+*.npz
+*.pyc
 VitalDB/ML/non_fiducial_features/8sec_0overlap/vitaldb_zero_shot_test.npz
+__pycache__/
