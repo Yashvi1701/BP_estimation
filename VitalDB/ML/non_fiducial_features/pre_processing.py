@@ -8,6 +8,7 @@ from tqdm import tqdm
 from scipy.stats import skew, kurtosis
 from scipy.signal import savgol_filter
 
+
 def extract_nonfiducial_features(signal):
 
     signal = np.asarray(signal, dtype=np.float64)

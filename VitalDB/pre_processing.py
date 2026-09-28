@@ -76,9 +76,46 @@ def extract_bp_from_abp(
 
     return sbp, dbp
 
+def robust_minmax_normalize(ppg):
 
+    p_low = np.percentile(ppg, 1)
+    p_high = np.percentile(ppg, 99)
 
+    if p_high == p_low:
+        return None
 
+    ppg = (ppg - p_low) / (p_high - p_low)
+
+    # Clip extreme noise/outliers
+    ppg = np.clip(ppg, 0, 1)
+
+    return ppg
+
+from scipy.signal import butter, filtfilt
+
+def remove_baseline_wander(ppg, fs=125, cutoff=0.5, order=4):
+    """
+    Remove low-frequency baseline wander from PPG.
+
+    ppg: 1D numpy array
+    fs: sampling frequency
+    cutoff: baseline cutoff frequency in Hz
+    """
+
+    nyquist = fs / 2
+    normal_cutoff = cutoff / nyquist
+
+    b, a = butter(
+        order,
+        normal_cutoff,
+        btype='low'
+    )
+
+    baseline = filtfilt(b, a, ppg)
+
+    corrected_ppg = ppg - baseline
+
+    return corrected_ppg
 
 def downsample_signal(
     signal,
@@ -100,14 +137,8 @@ def process_recording(
     STEP_SIZE=2000
 ):
 
-    std = np.std(ppg)
-
-    if std == 0:
-        return None, None
-
-    ppg = (
-        ppg - np.mean(ppg)
-    ) / std
+    ppg = remove_baseline_wander(ppg)
+    ppg = robust_minmax_normalize(ppg)
 
     X = []
     y = []
