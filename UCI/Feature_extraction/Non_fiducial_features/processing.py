@@ -97,12 +97,60 @@ def extract_bp_from_abp(abp_window):
 
     return sbp, dbp
 
+
+from scipy.signal import butter, filtfilt
+
+def remove_baseline_wander(ppg, fs=125, cutoff=0.5, order=4):
+    """
+    Remove low-frequency baseline wander from PPG.
+
+    ppg: 1D numpy array
+    fs: sampling frequency
+    cutoff: baseline cutoff frequency in Hz
+    """
+
+    nyquist = fs / 2
+    normal_cutoff = cutoff / nyquist
+
+    b, a = butter(
+        order,
+        normal_cutoff,
+        btype='low'
+    )
+
+    baseline = filtfilt(b, a, ppg)
+
+    corrected_ppg = ppg - baseline
+
+    return corrected_ppg
+
+
+def robust_minmax_normalize(ppg):
+
+    p_low = np.percentile(ppg, 1)
+    p_high = np.percentile(ppg, 99)
+
+    if p_high == p_low:
+        return None
+
+    ppg = (ppg - p_low) / (p_high - p_low)
+
+    # Clip extreme noise/outliers
+    ppg = np.clip(ppg, 0, 1)
+
+    return ppg
+
 def process_recording(recording, WINDOW_SIZE, STEP_SIZE ):
 
     data = recording[:]
 
+
     ppg = data[:,0]
     abp = data[:,1]
+    ppg = remove_baseline_wander(ppg)
+    ppg = robust_minmax_normalize(ppg)
+    if ppg is None:
+        return None, None
 
     X = []
     y = []
@@ -557,14 +605,14 @@ def select_mrmr(
     sample_size=50000,
     random_state=42
 ):
-    
+
     X = X.copy()
     y = np.asarray(y, dtype=np.float64)
 
     # --------------------------------------------------------
-    # 1. Sample training data for feature selection
+    # 1. Sample training data
     # --------------------------------------------------------
-    
+
     rng = np.random.RandomState(random_state)
 
     n_samples = min(sample_size, len(X))
@@ -580,7 +628,6 @@ def select_mrmr(
 
     print(f"mRMR: using {n_samples} samples for feature selection")
 
-    # Convert to numpy
     X_values = X_sample.values.astype(np.float64)
     y_values = y_sample.astype(np.float64)
 
@@ -623,10 +670,19 @@ def select_mrmr(
 
     selected = []
 
+    # Store information about selection
+    selection_rank = np.full(n_features, np.nan)
+    mrmr_score = np.full(n_features, np.nan)
+    avg_redundancy = np.full(n_features, np.nan)
+
     # First feature = highest relevance
     first_feature = np.argmax(relevance)
 
     selected.append(first_feature)
+
+    selection_rank[first_feature] = 1
+    mrmr_score[first_feature] = relevance[first_feature]
+    avg_redundancy[first_feature] = 0
 
     remaining = set(range(n_features))
     remaining.remove(first_feature)
@@ -635,12 +691,12 @@ def select_mrmr(
 
         best_feature = None
         best_score = -np.inf
+        best_redundancy = None
 
         for candidate in remaining:
 
-            # Average redundancy with
-            # already selected features
-            avg_redundancy = np.mean([
+            # Average redundancy with already selected features
+            candidate_redundancy = np.mean([
                 redundancy[candidate, s]
                 for s in selected
             ])
@@ -648,16 +704,24 @@ def select_mrmr(
             # mRMR score
             score = (
                 relevance[candidate]
-                - avg_redundancy
+                - candidate_redundancy
             )
 
             if score > best_score:
 
                 best_score = score
                 best_feature = candidate
+                best_redundancy = candidate_redundancy
 
         selected.append(best_feature)
         remaining.remove(best_feature)
+
+        # Store information
+        rank = len(selected)
+
+        selection_rank[best_feature] = rank
+        mrmr_score[best_feature] = best_score
+        avg_redundancy[best_feature] = best_redundancy
 
     # --------------------------------------------------------
     # 5. Get selected feature names
@@ -674,16 +738,19 @@ def select_mrmr(
 
     results = pd.DataFrame({
         "feature": X.columns,
-        "relevance_MI": relevance
+        "relevance_MI": relevance,
+        "avg_redundancy": avg_redundancy,
+        "mRMR_score": mrmr_score,
+        "selection_rank": selection_rank
     })
 
+    # Selected features first, in selection order
     results = results.sort_values(
-        "relevance_MI",
-        ascending=False
+        "selection_rank",
+        na_position="last"
     ).reset_index(drop=True)
 
     return selected_features, results
-
 
 # ============================================================
 # RELIEFF FEATURE SELECTION
