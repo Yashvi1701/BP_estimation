@@ -446,12 +446,6 @@ def process_vitaldb_recording(
                 ppg_window,
             )
 
-            # -------------------------------------
-            # Check expected size
-            # -------------------------------------
-
-            if len(ppg_window_125) != 1000:
-                continue
 
             # -------------------------------------
             # Store
