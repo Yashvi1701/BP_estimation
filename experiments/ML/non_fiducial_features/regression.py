@@ -17,6 +17,10 @@ def print_metrics(y_true, y_pred):
 from matplotlib import pyplot as plt
 import numpy as np
 
+import numpy as np
+import matplotlib.pyplot as plt
+
+
 def plot_regression_results(
     y_true,
     y_pred,
@@ -24,18 +28,35 @@ def plot_regression_results(
     target_name
 ):
 
+    # Convert to NumPy arrays
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
     residuals = y_true - y_pred
 
     # ----------------------------------------
     # 1. TRUE VS PREDICTED
     # ----------------------------------------
+
     plt.figure(figsize=(7, 6))
 
-    plt.scatter(y_true, y_pred, alpha=0.3)
+    plt.scatter(
+        y_true,
+        y_pred,
+        alpha=0.3
+    )
 
-    min_val = min(y_true.min(), y_pred.min())
-    max_val = max(y_true.max(), y_pred.max())
+    min_val = min(
+        y_true.min(),
+        y_pred.min()
+    )
 
+    max_val = max(
+        y_true.max(),
+        y_pred.max()
+    )
+
+    # Ideal y = x line
     plt.plot(
         [min_val, max_val],
         [min_val, max_val],
@@ -43,9 +64,18 @@ def plot_regression_results(
         label="Ideal (y = x)"
     )
 
-    plt.xlabel(f"True {target_name} (mmHg)")
-    plt.ylabel(f"Predicted {target_name} (mmHg)")
-    plt.title(f"{model_name} — {target_name}: True vs Predicted")
+    plt.xlabel(
+        f"True {target_name} (mmHg)"
+    )
+
+    plt.ylabel(
+        f"Predicted {target_name} (mmHg)"
+    )
+
+    plt.title(
+        f"{model_name} — {target_name}: "
+        f"True vs Predicted"
+    )
 
     plt.legend()
     plt.grid(alpha=0.3)
@@ -56,34 +86,113 @@ def plot_regression_results(
     # ----------------------------------------
     # 2. RESIDUAL VS PREDICTED
     # ----------------------------------------
+
     plt.figure(figsize=(7, 5))
 
-    plt.scatter(y_pred, residuals, alpha=0.3)
+    plt.scatter(
+        y_pred,
+        residuals,
+        alpha=0.3
+    )
 
-    plt.axhline(0, linestyle="--")
+    # Zero-error line
+    plt.axhline(
+        0,
+        linestyle="--"
+    )
 
-    plt.xlabel(f"Predicted {target_name} (mmHg)")
-    plt.ylabel("Residual (mmHg)")
-    plt.title(f"{model_name} — {target_name}: Residual Plot")
+    plt.xlabel(
+        f"Predicted {target_name} (mmHg)"
+    )
+
+    plt.ylabel(
+        "Residual (mmHg)"
+    )
+
+    plt.title(
+        f"{model_name} — {target_name}: "
+        f"Residual Plot"
+    )
 
     plt.grid(alpha=0.3)
     plt.tight_layout()
     plt.show()
 
+
+    # ----------------------------------------
+    # 3. RESIDUAL DISTRIBUTION
+    # ----------------------------------------
+
+    plt.figure(figsize=(7, 5))
+
+    plt.hist(
+        residuals,
+        bins=50,
+        alpha=0.7
+    )
+
+    # Zero-error line
+    plt.axvline(
+        0,
+        linestyle="--"
+    )
+
+    plt.xlabel(
+        "Residual (mmHg)"
+    )
+
+    plt.ylabel(
+        "Frequency"
+    )
+
+    plt.title(
+        f"{model_name} — {target_name}: "
+        f"Residual Distribution"
+    )
+
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
     # ----------------------------------------
     # 4. MAE VS TRUE TARGET RANGE
+    #    WITH ERROR BARS
     # ----------------------------------------
 
-    # Different ranges depending on target
     if target_name.upper() == "DBP":
-        bins = [50, 60, 70, 80, 90, 100, 120, 150]
+
+        bins = [
+            50,
+            60,
+            70,
+            80,
+            90,
+            100,
+            120,
+            150
+        ]
+
     else:
+
         # SBP
-        bins = [70, 80, 100, 120, 140, 160, 180, 200]
+        bins = [
+            70,
+            80,
+            100,
+            120,
+            140,
+            160,
+            180,
+            200
+        ]
+
 
     mae_values = []
+    error_std = []
     sample_counts = []
     range_labels = []
+
 
     for i in range(len(bins) - 1):
 
@@ -101,52 +210,92 @@ def plot_regression_results(
         if count == 0:
             continue
 
-        mae = np.mean(
-            np.abs(
-                y_true[mask] - y_pred[mask]
-            )
+
+        # ----------------------------------------
+        # Absolute errors for this BP range
+        # ----------------------------------------
+
+        absolute_errors = np.abs(
+            y_true[mask] -
+            y_pred[mask]
         )
 
+
+        # Mean Absolute Error
+        mae = np.mean(
+            absolute_errors
+        )
+
+
+        # Standard deviation of absolute errors
+        std = np.std(
+            absolute_errors
+        )
+
+
         mae_values.append(mae)
+        error_std.append(std)
         sample_counts.append(count)
+
         range_labels.append(
             f"{lower}–{upper}"
         )
 
-    # Plot
+
+    # ----------------------------------------
+    # Plot MAE + error bars
+    # ----------------------------------------
+
     plt.figure(figsize=(9, 5))
 
     bars = plt.bar(
         range_labels,
-        mae_values
+        mae_values,
+        yerr=error_std,
+        capsize=5,
+        alpha=0.8
     )
+
 
     plt.xlabel(
         f"True {target_name} range (mmHg)"
     )
 
-    plt.ylabel("MAE (mmHg)")
+    plt.ylabel(
+        "MAE (mmHg)"
+    )
 
     plt.title(
         f"{model_name} — {target_name}: "
         f"MAE by True Target Range"
     )
 
-    # Add MAE and number of samples
-    for bar, mae, count in zip(
+
+    # ----------------------------------------
+    # Add MAE ± SD and sample count
+    # ----------------------------------------
+
+    for bar, mae, std, count in zip(
         bars,
         mae_values,
+        error_std,
         sample_counts
     ):
 
         plt.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height(),
-            f"{mae:.2f}\n(n={count:,})",
+            bar.get_x() +
+            bar.get_width() / 2,
+
+            bar.get_height()+std+1,
+
+            f"{mae:.2f} ± {std:.2f}\n"
+            f"(n={count:,})",
+
             ha="center",
             va="bottom",
             fontsize=9
         )
+
 
     plt.grid(
         axis="y",
