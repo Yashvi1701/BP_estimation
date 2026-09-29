@@ -181,6 +181,8 @@ def extract_bp_from_abp(abp_window, fs=500):
 
     if dbp < 20 or dbp > 150:
         return None, None
+    if sbp-dbp<20:
+        return None, None
 
     return sbp, dbp
 
