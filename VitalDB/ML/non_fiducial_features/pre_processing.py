@@ -994,7 +994,16 @@ def process_vitaldb_dataset(
 
 
 
+# ----------------------------------------------------
+# For features.ipynb
 
+
+import os
+import glob
+import numpy as np
+import pandas as pd
+from tqdm.auto import tqdm
+from joblib import Parallel, delayed
 
 
 
@@ -1234,3 +1243,108 @@ def extract_features_from_dataset(
     )
 
     return pd.DataFrame(results)
+
+
+
+# --------------------------------------------------
+# Function
+# --------------------------------------------------
+import joblib
+def create_vitaldb_feature_set(df_vitaldb, UCI_PREPROCESSING_DIR, VITALDB_SAVE_DIR, method, target):
+
+    name = f"{target}_{method}"
+
+    print("=" * 70)
+    print(f"Processing: {name}")
+    print("=" * 70)
+
+    # --------------------------------------------------
+    # 1. Load UCI preprocessing package
+    # --------------------------------------------------
+
+    pkl_path = os.path.join(
+        UCI_PREPROCESSING_DIR,
+        f"{name}_preprocessing.pkl"
+    )
+
+    print("Loading:", pkl_path)
+
+    package = joblib.load(pkl_path)
+
+    selected_features = package["feature_names"]
+    scaler = package["scaler"]
+
+    print("Target:", package["target"])
+    print("Number of features:", len(selected_features))
+    print("Features:")
+    print(selected_features)
+
+
+    # --------------------------------------------------
+    # 2. Check VitalDB features
+    # --------------------------------------------------
+
+    missing_features = [
+        f for f in selected_features
+        if f not in df_vitaldb.columns
+    ]
+
+    if missing_features:
+        raise ValueError(
+            f"Missing features in df_vitaldb: {missing_features}"
+        )
+
+
+    # --------------------------------------------------
+    # 3. Select features from VitalDB
+    # --------------------------------------------------
+
+    X_vital = df_vitaldb[selected_features].copy()
+
+    y_vital = df_vitaldb[target].copy()
+
+
+    # --------------------------------------------------
+    # 4. Apply UCI TRAIN-FITTED scaler
+    # --------------------------------------------------
+
+    X_vital_scaled = scaler.transform(X_vital)
+
+
+    # --------------------------------------------------
+    # 5. Create DataFrame
+    # --------------------------------------------------
+
+    vital_scaled_df = pd.DataFrame(
+        X_vital_scaled,
+        columns=selected_features,
+        index=df_vitaldb.index
+    )
+
+    # Add target
+    vital_scaled_df[target] = y_vital.values
+
+    # Preserve case ID
+    if "case_id" in df_vitaldb.columns:
+        vital_scaled_df["case_id"] = df_vitaldb["case_id"].values
+
+
+    # --------------------------------------------------
+    # 6. Save CSV
+    # --------------------------------------------------
+
+    output_path = os.path.join(
+        VITALDB_SAVE_DIR,
+        f"{name}_vitaldb.csv"
+    )
+
+    vital_scaled_df.to_csv(
+        output_path,
+        index=False
+    )
+
+    print("\nVitalDB shape:", vital_scaled_df.shape)
+    print("Saved:", output_path)
+    print()
+
+    return vital_scaled_df
