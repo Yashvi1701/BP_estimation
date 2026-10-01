@@ -406,7 +406,7 @@ def interaction_regression(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 4. Train
@@ -467,7 +467,7 @@ def huber_regression(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 4. Train
@@ -528,7 +528,7 @@ def decision_tree(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 4. Train
@@ -574,7 +574,7 @@ def random_forest(
     # 1. Create Random Forest
     rf = RandomForestRegressor(
         random_state=42,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 2. Hyperparameter grid
@@ -592,7 +592,7 @@ def random_forest(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 4. Train
@@ -638,7 +638,7 @@ def extra_trees(
     # 1. Create Extra Trees model
     extra_trees = ExtraTreesRegressor(
         random_state=42,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 2. Hyperparameter grid
@@ -656,7 +656,7 @@ def extra_trees(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 4. Train
@@ -702,7 +702,7 @@ def xgboost_model(
     xgb = XGBRegressor(
         objective="reg:squarederror",
         random_state=42,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 2. Hyperparameter grid
@@ -720,7 +720,7 @@ def xgboost_model(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2
+        n_jobs=8
     )
 
     # 4. Train
@@ -767,7 +767,7 @@ def lightgbm_model(
     lgbm = LGBMRegressor(
         objective="regression",
         random_state=42,
-        n_jobs=2,
+        n_jobs=8,
         verbosity=-1
     )
 
@@ -785,7 +785,7 @@ def lightgbm_model(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2,
+        n_jobs=8,
         verbose=2
     )
 
@@ -912,7 +912,7 @@ def gpr_matern(
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=1
+        n_jobs=8
     )
 
     # --------------------------------------------------
@@ -957,6 +957,52 @@ def gpr_matern(
 
     return grid_gpr_matern, y_test_pred
 
+def predict_gpr_in_batches(
+    model,
+    X,
+    y_test,
+    target_name,
+    model_name,
+    batch_size=1000
+):
+
+    predictions = []
+
+    for start in range(0, len(X), batch_size):
+
+        end = min(start + batch_size, len(X))
+
+        X_batch = X[start:end]
+
+        pred_batch = model.predict(X_batch)
+
+        predictions.append(pred_batch)
+
+        # print(f"Processed {end:,} / {len(X):,}")
+
+    # Combine all batch predictions
+    y_test_pred = np.concatenate(predictions)
+
+    # --------------------------------------------------
+    # Metrics
+    # --------------------------------------------------
+    print_metrics(
+        y_test,
+        y_test_pred
+    )
+
+    # --------------------------------------------------
+    # Plots
+    # --------------------------------------------------
+    plot_regression_results(
+        y_test,
+        y_test_pred,
+        model_name,
+        target_name=target_name
+    )
+
+    return y_test_pred
+
 
 ########################################3
 # GPR RATIONAL QUADRATIC
@@ -968,6 +1014,15 @@ from sklearn.gaussian_process.kernels import (
 )
 from sklearn.model_selection import GridSearchCV
 
+import numpy as np
+
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import (
+    ConstantKernel,
+    RationalQuadratic,
+    WhiteKernel
+)
+from sklearn.model_selection import GridSearchCV
 
 def gpr_rational_quadratic(
     X_dev,
@@ -976,14 +1031,20 @@ def gpr_rational_quadratic(
     y_test,
     target_name,
     n_gpr=5000,
-    cv=3
+    cv=3,
+    batch_size=1000
 ):
-    # --------------------------------------------------
-    # 1. Take a manageable subset for GPR
-    # --------------------------------------------------
+
+    # ========================================================
+    # 1. SELECT SUBSET FOR GPR TRAINING
+    # ========================================================
+
     rng = np.random.RandomState(42)
 
-    n_samples = min(n_gpr, len(X_dev))
+    n_samples = min(
+        n_gpr,
+        len(X_dev)
+    )
 
     indices = rng.choice(
         len(X_dev),
@@ -991,7 +1052,10 @@ def gpr_rational_quadratic(
         replace=False
     )
 
+    # --------------------------------------------------------
     # Works for pandas DataFrame and NumPy arrays
+    # --------------------------------------------------------
+
     if hasattr(X_dev, "iloc"):
         X_gpr = X_dev.iloc[indices]
     else:
@@ -1002,100 +1066,168 @@ def gpr_rational_quadratic(
     else:
         y_gpr = y_dev[indices]
 
-    # --------------------------------------------------
-    # 2. Rational Quadratic GPR
-    # --------------------------------------------------
+    print(
+        f"GPR training samples: {len(X_gpr):,}"
+    )
+
+    # ========================================================
+    # 2. BASE GPR MODEL
+    # ========================================================
+
     gpr = GaussianProcessRegressor(
         normalize_y=True,
         random_state=42
     )
 
-    # --------------------------------------------------
-    # 3. Rational Quadratic kernel grid
-    # --------------------------------------------------
+    # ========================================================
+    # 3. RATIONAL QUADRATIC KERNEL GRID
+    # ========================================================
+
     param_grid = {
+
         "kernel": [
+
+            # ----------------------------------------------
+            # Length scale = 1.0
+            # ----------------------------------------------
+
             ConstantKernel(1.0)
-            * RationalQuadratic(
+            *
+            RationalQuadratic(
                 length_scale=1.0,
                 alpha=1.0
             )
-            + WhiteKernel(
-                noise_level=1.0
+            +
+            WhiteKernel(
+                noise_level=1.0,
+                noise_level_bounds=(1e-8, 1e5)
             ),
 
+            # ----------------------------------------------
+            # Length scale = 0.5
+            # ----------------------------------------------
+
             ConstantKernel(1.0)
-            * RationalQuadratic(
+            *
+            RationalQuadratic(
                 length_scale=0.5,
                 alpha=1.0
             )
-            + WhiteKernel(
-                noise_level=1.0
+            +
+            WhiteKernel(
+                noise_level=1.0,
+                noise_level_bounds=(1e-8, 1e5)
             ),
 
+            # ----------------------------------------------
+            # Length scale = 2.0
+            # ----------------------------------------------
+
             ConstantKernel(1.0)
-            * RationalQuadratic(
+            *
+            RationalQuadratic(
                 length_scale=2.0,
                 alpha=1.0
             )
-            + WhiteKernel(
-                noise_level=1.0
+            +
+            WhiteKernel(
+                noise_level=1.0,
+                noise_level_bounds=(1e-8, 1e5)
             )
         ]
     }
 
-    # --------------------------------------------------
-    # 4. GridSearchCV
-    # --------------------------------------------------
+    # ========================================================
+    # 4. GRID SEARCH
+    # ========================================================
+
     grid_gpr_rq = GridSearchCV(
+
         estimator=gpr,
+
         param_grid=param_grid,
+
         scoring="neg_mean_squared_error",
+
         cv=cv,
-        n_jobs=1
+
+        n_jobs=8,
+
+        verbose=1
     )
 
-    # --------------------------------------------------
-    # 5. Fit
-    # --------------------------------------------------
+    # ========================================================
+    # 5. TRAIN GPR
+    # ========================================================
+
+    print("\nStarting Rational Quadratic GPR GridSearch...")
+
     grid_gpr_rq.fit(
         X_gpr,
         y_gpr
     )
 
-    # --------------------------------------------------
-    # 6. Best parameters
-    # --------------------------------------------------
-    print("Best parameters:")
-    print(grid_gpr_rq.best_params_)
+    # ========================================================
+    # 6. BEST PARAMETERS
+    # ========================================================
 
-    # --------------------------------------------------
-    # 7. Test prediction
-    # --------------------------------------------------
-    y_test_pred = grid_gpr_rq.predict(X_test)
+    print("\nBest parameters:")
+    print(
+        grid_gpr_rq.best_params_
+    )
 
-    # --------------------------------------------------
-    # 8. Metrics
-    # --------------------------------------------------
-    print(f"\nRational Quadratic GPR — {target_name}")
-    print("------------------------------------------")
+    print(
+        "\nBest CV RMSE:",
+        np.sqrt(
+            -grid_gpr_rq.best_score_
+        )
+    )
 
-    print_metrics(
-        y_test,
+    # ========================================================
+    # 7. GET BEST TRAINED GPR
+    # ========================================================
+
+    best_gpr = grid_gpr_rq.best_estimator_
+
+    print(
+        "\nBest GPR model:"
+    )
+
+    print(best_gpr)
+
+    # ========================================================
+    # 8. BATCHED TEST PREDICTION
+    # ========================================================
+
+    print(
+        f"\nStarting batched prediction "
+        f"on {len(X_test):,} samples..."
+    )
+
+    y_test_pred = predict_gpr_in_batches(
+
+        model=best_gpr,
+
+        X=X_test,
+
+        y_test=y_test,
+
+        target_name=target_name,
+
+        model_name="Rational Quadratic GPR",
+
+        batch_size=batch_size
+    )
+
+    # ========================================================
+    # 9. RETURN
+    # ========================================================
+
+    return (
+        grid_gpr_rq,
         y_test_pred
     )
 
-    # --------------------------------------------------
-    # 9. Plots
-    # --------------------------------------------------
-    plot_regression_results(
-        y_test,
-        y_test_pred,
-        "Rational Quadratic GPR",
-        target_name=target_name
-    )
-
-    return grid_gpr_rq, y_test_pred
 
 
 
@@ -1106,6 +1238,69 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.model_selection import GridSearchCV
 import numpy as np
 
+def predict_ann_in_batches(
+    model,
+    X,
+    y_test,
+    target_name,
+    model_name,
+    batch_size=10000
+):
+
+    # Preallocate prediction array
+    y_test_pred = np.empty(
+        len(X),
+        dtype=np.float64
+    )
+
+    # --------------------------------------------------------
+    # Predict batch by batch
+    # --------------------------------------------------------
+
+    for start in range(0, len(X), batch_size):
+
+        end = min(
+            start + batch_size,
+            len(X)
+        )
+
+        X_batch = X[start:end]
+
+        y_test_pred[start:end] = model.predict(
+            X_batch
+        )
+
+        print(
+            f"Processed {end:,} / {len(X):,}"
+        )
+
+    # --------------------------------------------------------
+    # Metrics
+    # --------------------------------------------------------
+
+    print(
+        f"\n{model_name} — {target_name}"
+    )
+
+    print("------------------------------------")
+
+    print_metrics(
+        y_test,
+        y_test_pred
+    )
+
+    # --------------------------------------------------------
+    # Plots
+    # --------------------------------------------------------
+
+    plot_regression_results(
+        y_test,
+        y_test_pred,
+        model_name,
+        target_name=target_name
+    )
+
+    return y_test_pred
 
 def ann(
     X_dev,
@@ -1114,14 +1309,20 @@ def ann(
     y_test,
     target_name,
     n_ann=5000,
-    cv=3
+    cv=3,
+    batch_size=10000
 ):
-    # --------------------------------------------------
-    # 1. Take a manageable subset
-    # --------------------------------------------------
+
+    # ========================================================
+    # 1. TAKE A MANAGEABLE SUBSET
+    # ========================================================
+
     rng = np.random.RandomState(42)
 
-    n_samples = min(n_ann, len(X_dev))
+    n_samples = min(
+        n_ann,
+        len(X_dev)
+    )
 
     indices = rng.choice(
         len(X_dev),
@@ -1129,7 +1330,10 @@ def ann(
         replace=False
     )
 
+    # --------------------------------------------------------
     # Works for pandas DataFrame and NumPy arrays
+    # --------------------------------------------------------
+
     if hasattr(X_dev, "iloc"):
         X_ann = X_dev.iloc[indices]
     else:
@@ -1140,10 +1344,15 @@ def ann(
     else:
         y_ann = y_dev[indices]
 
-    # --------------------------------------------------
+    print(
+        f"ANN training samples: {len(X_ann):,}"
+    )
+
+    # ========================================================
     # 2. ANN / MLP
-    # --------------------------------------------------
-    ann = MLPRegressor(
+    # ========================================================
+
+    ann_model = MLPRegressor(
         random_state=42,
         max_iter=300,
         early_stopping=True,
@@ -1151,81 +1360,112 @@ def ann(
         n_iter_no_change=20
     )
 
-    # --------------------------------------------------
-    # 3. Hyperparameter grid
-    # --------------------------------------------------
+    # ========================================================
+    # 3. HYPERPARAMETER GRID
+    # ========================================================
+
     param_grid = {
+
         "hidden_layer_sizes": [
             (64, 32),
             (128, 64),
             (64, 32, 16)
         ],
-        "activation": ["relu"],
+
+        "activation": [
+            "relu"
+        ],
+
         "alpha": [
             0.0001,
             0.001,
             0.01
         ],
+
         "learning_rate_init": [
             0.001,
             0.01
         ],
+
         "batch_size": [
             256,
             512
         ]
     }
 
-    # --------------------------------------------------
-    # 4. GridSearchCV
-    # --------------------------------------------------
+    # ========================================================
+    # 4. GRIDSEARCHCV
+    # ========================================================
+
     grid_ann = GridSearchCV(
-        estimator=ann,
+        estimator=ann_model,
         param_grid=param_grid,
         scoring="neg_mean_squared_error",
         cv=cv,
-        n_jobs=2,
+        n_jobs=8,
         verbose=1
     )
 
-    # --------------------------------------------------
-    # 5. Fit
-    # --------------------------------------------------
+    # ========================================================
+    # 5. FIT
+    # ========================================================
+
+    print("\nStarting ANN / MLP GridSearch...")
+
     grid_ann.fit(
         X_ann,
         y_ann
     )
 
-    # --------------------------------------------------
-    # 6. Best parameters
-    # --------------------------------------------------
-    print("Best parameters:")
-    print(grid_ann.best_params_)
+    # ========================================================
+    # 6. BEST PARAMETERS
+    # ========================================================
 
-    # --------------------------------------------------
-    # 7. Test prediction
-    # --------------------------------------------------
-    y_test_pred = grid_ann.predict(X_test)
+    print("\nBest parameters:")
 
-    # --------------------------------------------------
-    # 8. Metrics
-    # --------------------------------------------------
-    print(f"\nANN / MLP Regressor — {target_name}")
-    print("------------------------------------")
+    print(
+        grid_ann.best_params_
+    )
 
-    print_metrics(
-        y_test,
+    print(
+        "\nBest CV RMSE:",
+        np.sqrt(
+            -grid_ann.best_score_
+        )
+    )
+
+    # ========================================================
+    # 7. GET BEST TRAINED MODEL
+    # ========================================================
+
+    best_ann = grid_ann.best_estimator_
+
+    print("\nBest ANN / MLP model:")
+    print(best_ann)
+
+    # ========================================================
+    # 8. BATCHED TEST PREDICTION
+    # ========================================================
+
+    print(
+        f"\nStarting batched prediction "
+        f"on {len(X_test):,} samples..."
+    )
+
+    y_test_pred = predict_ann_in_batches(
+        model=best_ann,
+        X=X_test,
+        y_test=y_test,
+        target_name=target_name,
+        model_name="ANN / MLP Regressor",
+        batch_size=batch_size
+    )
+
+    # ========================================================
+    # 9. RETURN
+    # ========================================================
+
+    return (
+        grid_ann,
         y_test_pred
     )
-
-    # --------------------------------------------------
-    # 9. Plots
-    # --------------------------------------------------
-    plot_regression_results(
-        y_test,
-        y_test_pred,
-        "ANN / MLP Regressor",
-        target_name=target_name
-    )
-
-    return grid_ann, y_test_pred
