@@ -588,3 +588,299 @@ def load_UCI_dataset(
         y_test
     )
 
+
+
+def evaluate_minirocket_vitaldb(
+    base_dir,
+    rocket,
+    best_en_sbp,
+    best_en_dbp,
+    batch_size=5000
+):
+    """
+    Zero-shot VitalDB evaluation using a fitted MiniROCKET
+    transformer and separately trained ElasticNet SBP/DBP models.
+
+    MiniROCKET is NOT refitted on VitalDB.
+
+    Parameters
+    ----------
+    base_dir : str
+        Directory containing case_*.npz files.
+
+    rocket : fitted MiniROCKET transformer
+        MiniROCKET fitted only on the UCI training data.
+
+    best_en_sbp : fitted model
+        ElasticNet model trained for SBP.
+
+    best_en_dbp : fitted model
+        ElasticNet model trained for DBP.
+
+    batch_size : int
+        Number of VitalDB windows processed at once.
+
+    Returns
+    -------
+    results : dict
+        VitalDB true and predicted SBP/DBP values.
+    """
+
+    import os
+    import glob
+    import numpy as np
+    import pandas as pd
+    from tqdm.auto import tqdm
+
+    # ============================================================
+    # 1. FIND VITALDB CASES
+    # ============================================================
+
+    npz_files = sorted(
+        glob.glob(
+            os.path.join(base_dir, "case_*.npz")
+        )
+    )
+
+    print("Number of VitalDB cases:", len(npz_files))
+
+    if len(npz_files) == 0:
+        raise ValueError(
+            f"No case_*.npz files found in:\n{base_dir}"
+        )
+
+    # ============================================================
+    # 2. STORAGE FOR ALL PREDICTIONS
+    # ============================================================
+
+    case_ids = []
+
+    sbp_true_all = []
+    sbp_pred_all = []
+
+    dbp_true_all = []
+    dbp_pred_all = []
+
+    # ============================================================
+    # 3. PROCESS EACH CASE
+    # ============================================================
+
+    for file in tqdm(
+        npz_files,
+        desc="MiniROCKET VitalDB prediction",
+        unit="case"
+    ):
+
+        # --------------------------------------------------------
+        # Load case
+        # --------------------------------------------------------
+
+        data = np.load(file)
+
+        X = data["X"]
+        y = data["y"]
+        if X.ndim == 2:
+            X = X[:, np.newaxis, :]
+
+        case_id = os.path.basename(file).replace(
+            ".npz",
+            ""
+        )
+
+        # print(
+        #     f"\nProcessing {case_id} "
+        #     f"| X shape = {X.shape}"
+        # )
+
+        # --------------------------------------------------------
+        # True targets
+        # --------------------------------------------------------
+
+        sbp_true = y[:, 0]
+        dbp_true = y[:, 1]
+
+        case_sbp_pred = []
+        case_dbp_pred = []
+
+        # --------------------------------------------------------
+        # MiniROCKET + prediction in batches
+        # --------------------------------------------------------
+
+        for start in range(
+            0,
+            len(X),
+            batch_size
+        ):
+
+            end = min(
+                start + batch_size,
+                len(X)
+            )
+
+            X_batch = X[start:end]
+
+            # ====================================================
+            # MiniROCKET TRANSFORM
+            # ====================================================
+
+            X_rocket_batch = rocket.transform(
+                X_batch
+            )
+
+            # ====================================================
+            # PREDICT SBP
+            # ====================================================
+
+            sbp_pred_batch = best_en_sbp.predict(
+                X_rocket_batch
+            )
+
+            # ====================================================
+            # PREDICT DBP
+            # ====================================================
+
+            dbp_pred_batch = best_en_dbp.predict(
+                X_rocket_batch
+            )
+
+            case_sbp_pred.append(
+                sbp_pred_batch
+            )
+
+            case_dbp_pred.append(
+                dbp_pred_batch
+            )
+
+            # X_rocket_batch is discarded here
+            # before moving to the next batch
+
+        # --------------------------------------------------------
+        # Combine predictions for this case
+        # --------------------------------------------------------
+
+        case_sbp_pred = np.concatenate(
+            case_sbp_pred
+        )
+
+        case_dbp_pred = np.concatenate(
+            case_dbp_pred
+        )
+
+        # --------------------------------------------------------
+        # Store results
+        # --------------------------------------------------------
+
+        sbp_true_all.append(
+            sbp_true
+        )
+
+        sbp_pred_all.append(
+            case_sbp_pred
+        )
+
+        dbp_true_all.append(
+            dbp_true
+        )
+
+        dbp_pred_all.append(
+            case_dbp_pred
+        )
+
+        case_ids.extend(
+            [case_id] * len(sbp_true)
+        )
+
+    # ============================================================
+    # 4. COMBINE ALL CASES
+    # ============================================================
+
+    sbp_true_all = np.concatenate(
+        sbp_true_all
+    )
+
+    sbp_pred_all = np.concatenate(
+        sbp_pred_all
+    )
+
+    dbp_true_all = np.concatenate(
+        dbp_true_all
+    )
+
+    dbp_pred_all = np.concatenate(
+        dbp_pred_all
+    )
+
+    # ============================================================
+    # 5. PRINT METRICS
+    # ============================================================
+
+    print("\n")
+    print("=" * 60)
+    print("MiniROCKET + ElasticNet")
+    print("VITALDB ZERO-SHOT RESULTS")
+    print("=" * 60)
+
+    print("\nSBP")
+    print("-" * 30)
+
+    print_metrics(
+        sbp_true_all,
+        sbp_pred_all
+    )
+
+    print("\nDBP")
+    print("-" * 30)
+
+    print_metrics(
+        dbp_true_all,
+        dbp_pred_all
+    )
+
+    # ============================================================
+    # 6. REGRESSION PLOTS
+    # ============================================================
+
+    plot_regression_results(
+        sbp_true_all,
+        sbp_pred_all,
+        model_name="MiniROCKET + ElasticNet",
+        target_name="SBP"
+    )
+
+    plot_regression_results(
+        dbp_true_all,
+        dbp_pred_all,
+        model_name="MiniROCKET + ElasticNet",
+        target_name="DBP"
+    )
+
+    # ============================================================
+    # 7. RESULTS DATAFRAME
+    # ============================================================
+
+    df_results = pd.DataFrame({
+        "case_id": case_ids,
+        "SBP_true": sbp_true_all,
+        "SBP_pred": sbp_pred_all,
+        "DBP_true": dbp_true_all,
+        "DBP_pred": dbp_pred_all
+    })
+
+    print("\nFinal prediction shape:")
+    print(df_results.shape)
+
+    print("\nFirst 5 predictions:")
+    print(df_results.head())
+
+    # ============================================================
+    # 8. RETURN
+    # ============================================================
+
+    return {
+        "df": df_results,
+        "sbp_true": sbp_true_all,
+        "sbp_pred": sbp_pred_all,
+        "dbp_true": dbp_true_all,
+        "dbp_pred": dbp_pred_all,
+        "case_ids": case_ids
+    }
