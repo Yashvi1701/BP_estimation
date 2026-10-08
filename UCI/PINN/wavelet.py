@@ -80,9 +80,10 @@ def wavelet_denoise(
 def analyze_wavelet_denoising(
     ppg,
     denoised_ppg,
+     wavelets,
     fs=125,
-    plot_seconds=30
-):
+    plot_seconds=30, 
+ ):  
     """
     Compare original and wavelet-denoised PPG.
 
@@ -280,7 +281,7 @@ def analyze_wavelet_denoising(
     )
 
     plt.title(
-        "Original vs db8 Wavelet-Denoised PPG"
+        f"Original vs {wavelets} Wavelet-Denoised PPG"
     )
 
     plt.legend()
@@ -439,10 +440,11 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
 
 
 
- def remove_wavelet_components(
+
+def remove_wavelet_components(
     ppg,
-    wavelet="db8",
-    level=8,
+    wavelet,
+    level,
     remove_components=("A",)
 ):
     """
@@ -454,8 +456,7 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
         1D PPG signal.
 
     wavelet : str
-        Wavelet name, e.g.
-        "db4", "db8", "sym4", "coif5".
+        Wavelet name, e.g. "db4", "db8", "sym4", "coif5".
 
     level : int
         DWT decomposition level.
@@ -467,19 +468,16 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
             ("A",)
                 Remove approximation only.
 
-            ("A", "D8")
-                Remove A8 and D8 when level=8.
-
-            ("A", "D7", "D8")
-                Remove A8, D8 and D7 when level=8.
+            ("A", "D7")
+                Remove A7 and D7 when level=7.
 
             ("D1", "D2")
-                Remove high-frequency components.
+                Remove highest-frequency components.
 
     Returns
     -------
     denoised_ppg : numpy array
-        Reconstructed PPG after removing the selected components.
+        Reconstructed PPG after removing selected components.
     """
 
     # ==================================================
@@ -489,14 +487,17 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
     ppg = np.asarray(
         ppg,
         dtype=np.float64
-    )
+    ).squeeze()
 
     # ==================================================
     # Check input
     # ==================================================
 
     if ppg.ndim != 1:
-        ppg = ppg.squeeze()
+        raise ValueError(
+            f"PPG must be 1D after squeeze. "
+            f"Got shape {ppg.shape}"
+        )
 
     if len(ppg) < 2:
         raise ValueError(
@@ -536,14 +537,9 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
         level=level
     )
 
-    # Structure:
+    # coeffs:
     #
-    # [A_level,
-    #  D_level,
-    #  D_(level-1),
-    #  ...
-    #  D2,
-    #  D1]
+    # [A_level, D_level, D_(level-1), ..., D2, D1]
 
     # ==================================================
     # Normalize component names
@@ -555,26 +551,18 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
     ]
 
     # ==================================================
-    # Remove selected components
+    # Remove approximation component
     # ==================================================
 
-    # ----------------------------------------------
-    # Approximation component
-    # ----------------------------------------------
-
     if "A" in remove_components:
+
         coeffs[0] = np.zeros_like(
             coeffs[0]
         )
 
-    elif f"A{level}" in remove_components:
-        coeffs[0] = np.zeros_like(
-            coeffs[0]
-        )
-
-    # ----------------------------------------------
-    # Detail components
-    # ----------------------------------------------
+    # ==================================================
+    # Remove detail components
+    # ==================================================
 
     for j in range(1, level + 1):
 
@@ -582,10 +570,13 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
 
         if component_name in remove_components:
 
-            # D_level is coeffs[1]
-            # D_(level-1) is coeffs[2]
+            # Mapping:
+            #
+            # D_level     -> coeffs[1]
+            # D_level-1   -> coeffs[2]
             # ...
-            # D1 is coeffs[-1]
+            # D2          -> coeffs[-2]
+            # D1          -> coeffs[-1]
 
             coeff_index = level - j + 1
 
@@ -602,11 +593,247 @@ def plot_dwt_levels(ppg, wavelet, level, fs=125):
         wavelet=wavelet
     )
 
-    # waverec can return extra samples
+    # waverec may return extra samples
     denoised_ppg = denoised_ppg[
         :len(ppg)
     ]
 
     return denoised_ppg.astype(
         np.float64
+    )
+def create_wavelet_dataset(
+    input_folder,
+    output_folder,
+    wavelet,
+    level,
+    remove_components
+):
+    """
+    Process all four UCI Part files using DWT.
+
+    Recordings shorter than 1000 samples are skipped.
+    The DWT decomposition level is never changed.
+    """
+
+    # ==================================================
+    # Create output folder
+    # ==================================================
+
+    os.makedirs(
+        output_folder,
+        exist_ok=True
+    )
+
+    # ==================================================
+    # Process Part_1 -> Part_4
+    # ==================================================
+
+    for part in range(1, 5):
+
+        input_file = os.path.join(
+            input_folder,
+            f"Part_{part}.mat"
+        )
+
+        output_file = os.path.join(
+            output_folder,
+            f"Part_{part}.mat"
+        )
+
+        print(
+            f"\nProcessing Part_{part}.mat"
+        )
+
+        # ----------------------------------------------
+        # Open original UCI file
+        # ----------------------------------------------
+
+        with h5py.File(
+            input_file,
+            "r"
+        ) as f_in:
+
+            dataset = f_in[
+                f"Part_{part}"
+            ]
+
+            print(
+                "Number of recordings:",
+                dataset.shape[0]
+            )
+
+            # ------------------------------------------
+            # Create output HDF5
+            # ------------------------------------------
+
+            with h5py.File(
+                output_file,
+                "w"
+            ) as f_out:
+
+                output_dataset = f_out.create_dataset(
+                    f"Part_{part}",
+                    shape=dataset.shape,
+                    dtype=h5py.ref_dtype
+                )
+
+                # --------------------------------------
+                # Process every recording
+                # --------------------------------------
+
+                output_index = 0
+                skipped = 0
+
+                for i in range(
+                    dataset.shape[0]
+                ):
+
+                    # ==================================
+                    # Dereference recording
+                    # ==================================
+
+                    ref = dataset[i, 0]
+
+                    recording = f_in[
+                        ref
+                    ]
+
+                    data = recording[:]
+
+                    # ==================================
+                    # Extract channels
+                    # ==================================
+
+                    ppg = data[:, 0]
+
+                    abp = data[:, 1]
+
+                    ecg = data[:, 2]
+
+                    # ==================================
+                    # Skip short recordings
+                    # ==================================
+
+                    if len(ppg) < 1000:
+
+                        skipped += 1
+
+                        print(
+                            f"  Skipping recording "
+                            f"{i + 1}: "
+                            f"length = {len(ppg)} "
+                            f"(< 1000)"
+                        )
+
+                        continue
+
+                    # ==================================
+                    # Wavelet processing
+                    # ==================================
+
+                    denoised_ppg = (
+                        remove_wavelet_components(
+                            ppg,
+                            wavelet=wavelet,
+                            level=level,
+                            remove_components=remove_components
+                        )
+                    )
+
+                    # ==================================
+                    # Reconstruct recording
+                    # ==================================
+
+                    processed_data = np.column_stack(
+                        (
+                            denoised_ppg,
+                            abp,
+                            ecg
+                        )
+                    )
+
+                    # ==================================
+                    # Store recording
+                    # ==================================
+
+                    recording_name = (
+                        f"recording_{output_index}"
+                    )
+
+                    output_recording = (
+                        f_out.create_dataset(
+                            recording_name,
+                            data=processed_data,
+                            dtype=np.float64
+                        )
+                    )
+
+                    # ==================================
+                    # Store reference
+                    # ==================================
+
+                    output_dataset[
+                        output_index, 0
+                    ] = output_recording.ref
+
+                    output_index += 1
+
+                    # ==================================
+                    # Progress
+                    # ==================================
+
+                    if (
+                        output_index % 100 == 0
+                        or i == 0
+                        or i == dataset.shape[0] - 1
+                    ):
+
+                        print(
+                            f"  Processed "
+                            f"{output_index} recordings"
+                        )
+
+                print(
+                    f"  Skipped: {skipped} recordings"
+                )
+
+                print(
+                    f"  Saved: {output_index} recordings"
+                )
+
+        print(
+            f"Saved: {output_file}"
+        )
+
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "Wavelet preprocessing complete!"
+    )
+
+    print(
+        "Wavelet:",
+        wavelet
+    )
+
+    print(
+        "Level:",
+        level
+    )
+
+    print(
+        "Removed components:",
+        remove_components
+    )
+
+    print(
+        "Minimum recording length:",
+        1000
+    )
+
+    print(
+        "Output folder:",
+        output_folder
     )

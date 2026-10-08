@@ -1286,7 +1286,166 @@ import numpy as np
 
 import numpy as np
 import matplotlib.pyplot as plt
+def plot_training_loss(history, model_name="ResNet1D"):
 
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    plt.figure(figsize=(8, 5))
+
+    plt.plot(
+        epochs,
+        history["train_loss"],
+        label="Train Loss"
+    )
+
+    plt.plot(
+        epochs,
+        history["val_loss"],
+        label="Validation Loss"
+    )
+
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+
+    plt.title(
+        f"{model_name}: Training and Validation Loss"
+    )
+
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_pinn_training_metrics(
+    history,
+    model_name="Windkessel PINN"
+):
+
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    # ============================================================
+    # 1. TOTAL LOSS
+    # ============================================================
+
+    plt.figure(figsize=(8, 5))
+
+    plt.plot(
+        epochs,
+        history["train_loss"],
+        label="Train Loss"
+    )
+
+    plt.plot(
+        epochs,
+        history["val_loss"],
+        label="Validation Loss"
+    )
+
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+
+    plt.title(
+        f"{model_name}: Total Loss vs Epoch"
+    )
+
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+    # ============================================================
+    # 2. SBP RMSE
+    # ============================================================
+
+    plt.figure(figsize=(8, 5))
+
+    plt.plot(
+        epochs,
+        history["train_sbp_rmse"],
+        label="Train SBP RMSE"
+    )
+
+    plt.plot(
+        epochs,
+        history["val_sbp_rmse"],
+        label="Validation SBP RMSE"
+    )
+
+    plt.xlabel("Epoch")
+    plt.ylabel("RMSE (mmHg)")
+
+    plt.title(
+        f"{model_name}: SBP RMSE vs Epoch"
+    )
+
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+    # ============================================================
+    # 3. DBP RMSE
+    # ============================================================
+
+    plt.figure(figsize=(8, 5))
+
+    plt.plot(
+        epochs,
+        history["train_dbp_rmse"],
+        label="Train DBP RMSE"
+    )
+
+    plt.plot(
+        epochs,
+        history["val_dbp_rmse"],
+        label="Validation DBP RMSE"
+    )
+
+    plt.xlabel("Epoch")
+    plt.ylabel("RMSE (mmHg)")
+
+    plt.title(
+        f"{model_name}: DBP RMSE vs Epoch"
+    )
+
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+    # ============================================================
+    # 4. PHYSICS LOSS
+    # ============================================================
+
+    plt.figure(figsize=(8, 5))
+
+    plt.plot(
+        epochs,
+        history["train_phys_loss"],
+        label="Train Physics Loss"
+    )
+
+    plt.plot(
+        epochs,
+        history["val_phys_loss"],
+        label="Validation Physics Loss"
+    )
+
+    plt.xlabel("Epoch")
+    plt.ylabel("Physics Loss")
+
+    plt.title(
+        f"{model_name}: Physics Loss vs Epoch"
+    )
+
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
 def plot_regression_results(
     y_true,
@@ -3045,3 +3204,411 @@ def run_windkessel_pinn(
     }
 
     return model, results
+
+
+
+
+
+#######################################################
+# WAVELETS
+
+def process_recording_w(
+    recording,
+    window_size,
+    step_size,
+    fs=125
+):
+
+    data = recording[:]
+
+    # -----------------------------------------
+    # Extract channels
+    # -----------------------------------------
+
+    ppg = data[:, 0]
+    abp = data[:, 1]
+    ppg = robust_minmax_normalize(ppg)
+
+    # -----------------------------------------
+    # Recording-level PPG normalization
+    # -----------------------------------------
+
+    if ppg is None:
+        return None, None, None
+ 
+
+    X = []
+    y = []
+    delays = []
+
+    # -----------------------------------------
+    # Windowing
+    # -----------------------------------------
+
+    for start in range(
+        0,
+        len(ppg) - window_size + 1,
+        step_size
+    ):
+
+        ppg_window = ppg[
+            start:start + window_size
+        ]
+
+        abp_window = abp[
+            start:start + window_size
+        ]
+
+        # -------------------------------------
+        # Extract SBP / DBP
+        # -------------------------------------
+
+        sbp, dbp = extract_bp_from_abp(
+            abp_window
+        )
+
+        if sbp is None:
+            continue
+
+        # -------------------------------------
+        # Extract beat-level delays
+        # -------------------------------------
+
+        beat_delays = get_delay_time(
+            ppg_window,
+            fs
+        )
+
+        # -------------------------------------
+        # No valid delay detected
+        # -------------------------------------
+
+        if len(beat_delays) == 0:
+            continue
+
+        # -------------------------------------
+        # One representative delay per window
+        # -------------------------------------
+
+        window_delay = np.median(
+            beat_delays
+        )
+
+        # -------------------------------------
+        # Store
+        # -------------------------------------
+
+        X.append(ppg_window)
+
+        y.append([
+            sbp,
+            dbp
+        ])
+
+        delays.append(
+            window_delay
+        )
+
+    # -----------------------------------------
+    # No valid windows
+    # -----------------------------------------
+
+    if len(X) == 0:
+        return None, None, None
+
+    return (
+        np.asarray(X, dtype=np.float32),
+        np.asarray(y, dtype=np.float32),
+        np.asarray(delays, dtype=np.float32)
+    )
+
+
+
+
+def process_split_w(
+    record_list,
+    window_size,
+    step_size,
+    fs=125
+):
+
+    X_all = []
+    y_all = []
+    delay_all = []
+
+    skipped_recordings = 0
+
+    # -----------------------------------------
+    # Process each recording
+    # -----------------------------------------
+
+    for f, ref in tqdm(
+        record_list,
+        desc="Processing recordings"
+    ):
+
+        recording = f[ref]
+
+        X, y, delays = process_recording_w(
+            recording,
+            window_size,
+            step_size,
+            fs
+        )
+
+        if X is None:
+
+            skipped_recordings += 1
+
+            continue
+
+        X_all.append(X)
+        y_all.append(y)
+        delay_all.append(delays)
+
+    # -----------------------------------------
+    # Combine all recordings
+    # -----------------------------------------
+
+    X_all = np.concatenate(
+        X_all,
+        axis=0
+    )
+
+    y_all = np.concatenate(
+        y_all,
+        axis=0
+    )
+
+    delay_all = np.concatenate(
+        delay_all,
+        axis=0
+    )
+
+    print(
+        "Skipped recordings:",
+        skipped_recordings
+    )
+
+    return (
+        X_all,
+        y_all,
+        delay_all
+    )
+
+
+def prepare_UCI_dataset_w(
+    data_path,
+    window_size,
+    step_size,
+    fs=125,
+    test_size=0.20,
+    val_size=0.10,
+    random_state=42
+):
+
+    # ==================================================
+    # 1. Load recording references
+    # ==================================================
+
+    recordings, files = load_UCI_recordings(
+        data_path
+    )
+
+    # ==================================================
+    # 2. SPLIT RECORDINGS FIRST
+    # ==================================================
+
+    (
+        train_records,
+        val_records,
+        test_records
+    ) = split_recordings(
+        recordings,
+        test_size,
+        val_size,
+        random_state
+    )
+
+    # ==================================================
+    # 3. Process TRAIN recordings
+    # ==================================================
+
+    print("\nProcessing TRAIN recordings...")
+
+    (
+        X_train,
+        y_train,
+        delay_train
+    ) = process_split_w(
+        train_records,
+        window_size,
+        step_size,
+        fs
+    )
+
+    # ==================================================
+    # 4. Process VALIDATION recordings
+    # ==================================================
+
+    print("\nProcessing VALIDATION recordings...")
+
+    (
+        X_val,
+        y_val,
+        delay_val
+    ) = process_split_w(
+        val_records,
+        window_size,
+        step_size,
+        fs
+    )
+
+    # ==================================================
+    # 5. Process TEST recordings
+    # ==================================================
+
+    print("\nProcessing TEST recordings...")
+
+    (
+        X_test,
+        y_test,
+        delay_test
+    ) = process_split_w(
+        test_records,
+        window_size,
+        step_size,
+        fs
+    )
+
+    # ==================================================
+    # 6. Add CNN channel dimension
+    # ==================================================
+
+    X_train = X_train[:, None, :]
+    X_val = X_val[:, None, :]
+    X_test = X_test[:, None, :]
+
+    # ==================================================
+    # 7. Convert to tensors
+    # ==================================================
+
+    X_train = torch.tensor(
+        X_train,
+        dtype=torch.float32
+    )
+
+    y_train = torch.tensor(
+        y_train,
+        dtype=torch.float32
+    )
+
+    delay_train = torch.tensor(
+        delay_train,
+        dtype=torch.float32
+    )
+
+    X_val = torch.tensor(
+        X_val,
+        dtype=torch.float32
+    )
+
+    y_val = torch.tensor(
+        y_val,
+        dtype=torch.float32
+    )
+
+    delay_val = torch.tensor(
+        delay_val,
+        dtype=torch.float32
+    )
+
+    X_test = torch.tensor(
+        X_test,
+        dtype=torch.float32
+    )
+
+    y_test = torch.tensor(
+        y_test,
+        dtype=torch.float32
+    )
+
+    delay_test = torch.tensor(
+        delay_test,
+        dtype=torch.float32
+    )
+
+    # ==================================================
+    # 8. Print shapes
+    # ==================================================
+
+    print(
+        "\n======================================"
+    )
+
+    print(
+        "DATASET SHAPES"
+    )
+
+    print(
+        "======================================"
+    )
+
+    print(
+        "X_train:",
+        X_train.shape
+    )
+
+    print(
+        "y_train:",
+        y_train.shape
+    )
+
+    print(
+        "delay_train:",
+        delay_train.shape
+    )
+
+    print(
+        "X_val:",
+        X_val.shape
+    )
+
+    print(
+        "y_val:",
+        y_val.shape
+    )
+
+    print(
+        "delay_val:",
+        delay_val.shape
+    )
+
+    print(
+        "X_test:",
+        X_test.shape
+    )
+
+    print(
+        "y_test:",
+        y_test.shape
+    )
+
+    print(
+        "delay_test:",
+        delay_test.shape
+    )
+
+    return (
+        X_train,
+        y_train,
+        delay_train,
+
+        X_val,
+        y_val,
+        delay_val,
+
+        X_test,
+        y_test,
+        delay_test
+    )
