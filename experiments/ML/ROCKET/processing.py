@@ -426,6 +426,7 @@ def process_recording(recording, WINDOW_SIZE, STEP_SIZE ):
     ppg = robust_minmax_normalize(ppg)
     if ppg is None:
         return None, None
+    ppg = ppg.astype(np.float32)  
 
     X = []
     y = []
@@ -451,7 +452,7 @@ def process_recording(recording, WINDOW_SIZE, STEP_SIZE ):
     if len(X)==0:
         return None,None
 
-    return np.array(X),np.array(y)
+    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32) 
 
 
 
@@ -595,7 +596,8 @@ def evaluate_minirocket_vitaldb(
     rocket,
     best_en_sbp,
     best_en_dbp,
-    batch_size=5000
+    model,
+    batch_size=2000
 ):
     """
     Zero-shot VitalDB evaluation using a fitted MiniROCKET
@@ -717,15 +719,8 @@ def evaluate_minirocket_vitaldb(
                 len(X)
             )
 
-            X_batch = X[start:end]
-
-            # ====================================================
-            # MiniROCKET TRANSFORM
-            # ====================================================
-
-            X_rocket_batch = rocket.transform(
-                X_batch
-            )
+            X_batch = X[start:end].astype(np.float32)
+            X_rocket_batch = rocket.transform(X_batch).to_numpy(dtype=np.float32)
 
             # ====================================================
             # PREDICT SBP
@@ -816,7 +811,7 @@ def evaluate_minirocket_vitaldb(
 
     print("\n")
     print("=" * 60)
-    print("MiniROCKET + ElasticNet")
+    print(f"MiniROCKET + {model}")
     print("VITALDB ZERO-SHOT RESULTS")
     print("=" * 60)
 
@@ -843,14 +838,14 @@ def evaluate_minirocket_vitaldb(
     plot_regression_results(
         sbp_true_all,
         sbp_pred_all,
-        model_name="MiniROCKET + ElasticNet",
+        model_name=f"MiniROCKET + {model}",
         target_name="SBP"
     )
 
     plot_regression_results(
         dbp_true_all,
         dbp_pred_all,
-        model_name="MiniROCKET + ElasticNet",
+        model_name=f"MiniROCKET + {model}",
         target_name="DBP"
     )
 
@@ -884,3 +879,219 @@ def evaluate_minirocket_vitaldb(
         "dbp_pred": dbp_pred_all,
         "case_ids": case_ids
     }
+
+
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from tqdm.auto import tqdm
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from tqdm.auto import tqdm
+
+
+class _FeatDS(Dataset):
+    def __init__(self, X, y, mu, sd, y_mean, y_std):
+        self.X, self.y = X, y
+        self.mu, self.sd, self.y_mean, self.y_std = mu, sd, y_mean, y_std
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, i):
+        x = (np.asarray(self.X[i], dtype=np.float32) - self.mu) / self.sd
+        t = (self.y[i] - self.y_mean) / self.y_std
+        return torch.from_numpy(x), torch.tensor(t, dtype=torch.float32)
+
+
+class MLPHead:
+    """Predicts one target (col 0 = SBP, col 1 = DBP). Has .predict() like sklearn."""
+    def __init__(self, model, col, mu, sd, y_mean, y_std, device, idx=None):
+        self.m, self.col = model, col
+        self.mu, self.sd, self.y_mean, self.y_std = mu, sd, y_mean, y_std
+        self.device, self.idx = device, idx   # idx = optional selected-feature indices
+
+    def predict(self, X, bs=4096):
+        X = np.asarray(X, dtype=np.float32)
+        if self.idx is not None:
+            X = X[:, self.idx]
+        X = (X - self.mu) / self.sd
+        self.m.eval()
+        out = []
+        with torch.no_grad():
+            for i in range(0, len(X), bs):
+                xb = torch.from_numpy(X[i:i + bs]).to(self.device)
+                out.append(self.m(xb).cpu().numpy())
+        out = np.concatenate(out) * self.y_std + self.y_mean
+        return out[:, self.col]
+
+def train_mlp(
+    X_train, y_train, X_val, y_val,
+    hidden=(512, 128),
+    in_dropout=0.2,
+    dropout=(0.3, 0.2),
+    lr=1e-3,
+    weight_decay=1e-2,
+    batch_size=512,
+    max_epochs=30,
+    patience=5,
+    feature_idx=None,
+    save_path="mlp_best.pt",
+    stat_batch=5000,
+):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # ---- feature scaler stats (streamed, low memory) ----
+    n = len(X_train)
+    d = len(feature_idx) if feature_idx is not None else X_train.shape[1]
+    s = np.zeros(d); ss = np.zeros(d)
+    for i in range(0, n, stat_batch):
+        xb = np.asarray(X_train[i:i + stat_batch], dtype=np.float64)
+        if feature_idx is not None:
+            xb = xb[:, feature_idx]
+        s += xb.sum(0); ss += (xb ** 2).sum(0)
+    mu = (s / n).astype(np.float32)
+    sd = np.sqrt(np.maximum(ss / n - (s / n) ** 2, 1e-12)).astype(np.float32)
+    sd[sd == 0] = 1
+
+    y_mean = y_train.mean(0).astype(np.float32)
+    y_std = y_train.std(0).astype(np.float32)
+    y_std_t = torch.tensor(y_std, device=device)   # for un-scaling to mmHg
+
+    def view(X):
+        return X if feature_idx is None else _SelView(X, feature_idx)
+
+    train_dl = DataLoader(_FeatDS(view(X_train), y_train, mu, sd, y_mean, y_std),
+                          batch_size=batch_size, shuffle=True, num_workers=0)
+    val_dl = DataLoader(_FeatDS(view(X_val), y_val, mu, sd, y_mean, y_std),
+                        batch_size=2048)
+
+    # ---- model ----
+    layers = [nn.Dropout(in_dropout)]
+    prev = d
+    for h, dr in zip(hidden, dropout):
+        layers += [nn.Linear(prev, h), nn.BatchNorm1d(h), nn.ReLU(), nn.Dropout(dr)]
+        prev = h
+    layers.append(nn.Linear(prev, 2))
+    model = nn.Sequential(*layers).to(device)
+
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=2, factor=0.5)
+    loss_fn = nn.HuberLoss()
+
+    def run_eval(loader):
+        """Returns huber loss and per-target MSE in mmHg^2 (eval mode, no dropout)."""
+        model.eval()
+        loss_sum, se = 0.0, torch.zeros(2, device=device)
+        cnt = 0
+        with torch.no_grad():
+            for xb, yb in loader:
+                xb, yb = xb.to(device), yb.to(device)
+                out = model(xb)
+                loss_sum += loss_fn(out, yb).item() * len(xb)
+                se += (((out - yb) * y_std_t) ** 2).sum(0)   # error in mmHg
+                cnt += len(xb)
+        mse = (se / cnt).cpu().numpy()                       # [SBP, DBP]
+        return loss_sum / cnt, mse
+
+    best_val, bad = float("inf"), 0
+    for epoch in range(max_epochs):
+        model.train()
+        for xb, yb in tqdm(train_dl, desc=f"epoch {epoch}", leave=False):
+            xb, yb = xb.to(device), yb.to(device)
+            opt.zero_grad()
+            loss_fn(model(xb), yb).backward()
+            opt.step()
+
+        # metrics in eval mode (train metrics use dropout-off for a fair comparison)
+        tr_loss, tr_mse = run_eval(train_dl)
+        vl, va_mse = run_eval(val_dl)
+        sched.step(vl)
+
+        tr_rmse, va_rmse = np.sqrt(tr_mse), np.sqrt(va_mse)
+        print(
+            f"epoch {epoch:02d} | "
+            f"TRAIN loss {tr_loss:.4f} MSE(SBP {tr_mse[0]:.2f}, DBP {tr_mse[1]:.2f}) "
+            f"RMSE(SBP {tr_rmse[0]:.2f}, DBP {tr_rmse[1]:.2f}) | "
+            f"VAL loss {vl:.4f} MSE(SBP {va_mse[0]:.2f}, DBP {va_mse[1]:.2f}) "
+            f"RMSE(SBP {va_rmse[0]:.2f}, DBP {va_rmse[1]:.2f})"
+        )
+
+        if vl < best_val:
+            best_val, bad = vl, 0
+            torch.save(model.state_dict(), save_path)
+        else:
+            bad += 1
+            if bad >= patience:
+                print("Early stopping.")
+                break
+
+    model.load_state_dict(torch.load(save_path, map_location=device))
+    model.eval()
+
+    sbp_head = MLPHead(model, 0, mu, sd, y_mean, y_std, device, idx=feature_idx)
+    dbp_head = MLPHead(model, 1, mu, sd, y_mean, y_std, device, idx=feature_idx)
+    return sbp_head, dbp_head
+class _SelView:
+    """Lazy column-selection view over a memmap (no copy of the full array)."""
+    def __init__(self, X, idx):
+        self.X, self.idx = X, idx
+        self.shape = (X.shape[0], len(idx))
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, i):
+        return np.asarray(self.X[i])[..., self.idx]
+
+
+import numpy as np
+
+def select_top_pearson_features(X, y, k=1000):
+    """
+    Select top-k features based on absolute Pearson correlation.
+
+    X : pandas DataFrame or numpy array
+        Shape: (n_samples, n_features)
+    y : numpy array or torch tensor
+        Shape: (n_samples,)
+    """
+
+    # Convert y to NumPy
+    if hasattr(y, "cpu"):
+        y = y.cpu().numpy()
+
+    y = np.asarray(y, dtype=np.float32)
+
+    # Process X as NumPy
+    if hasattr(X, "to_numpy"):
+        X = X.to_numpy(dtype=np.float32)
+    else:
+        X = np.asarray(X, dtype=np.float32)
+
+    # Center
+    X_mean = X.mean(axis=0)
+    y_mean = y.mean()
+
+    X_centered = X - X_mean
+    y_centered = y - y_mean
+
+    # Pearson correlation
+    numerator = np.sum(X_centered * y_centered[:, None], axis=0)
+
+    denominator = (
+        np.sqrt(np.sum(X_centered ** 2, axis=0))
+        * np.sqrt(np.sum(y_centered ** 2))
+    )
+
+    corr = numerator / np.maximum(denominator, 1e-12)
+
+    # Rank by absolute correlation
+    top_idx = np.argsort(np.abs(corr))[::-1][:k]
+
+    return top_idx, corr[top_idx]
