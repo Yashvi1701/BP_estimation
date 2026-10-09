@@ -3787,3 +3787,5 @@ def plot_loss_vs_epoch(history, model_name="Basic CNN"):
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+
+
