@@ -174,6 +174,9 @@ def plot_regression_results(
     if target_name.upper() == "DBP":
 
         bins = [
+            20,
+            30,
+            40,
             50,
             60,
             70,
@@ -188,6 +191,8 @@ def plot_regression_results(
 
         # SBP
         bins = [
+            50,
+            60,
             70,
             80,
             100,
